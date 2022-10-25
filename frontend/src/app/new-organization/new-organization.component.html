@@ -1,34 +1,34 @@
 <div class="l-body">
-  <mat-card>
+  <mat-card *ngIf="contextLoaded$ | async">
     <mat-card-content>
-      <ng-container *ngIf="userDetails$ | async as user">
-        <ng-container
-          *ngIf="
-            (enableUserRegistration$ | async) || user.isSuperuser;
-            else elseBlock
-          "
-        >
-          <mat-card-title>Create a New Organization</mat-card-title>
-          <p *ngIf="(organizationCount$ | async) === 0">
-            This is the first step to get started with GlitchTip.
-          </p>
+      <ng-container>
+        <ng-container *ngIf="canCreateOrg$ | async; else elseBlock">
+          <mat-card-title i18n>Create a New Organization</mat-card-title>
+          <p *ngIf="(organizationCount$ | async) === 0" i18n
+            >This is the first step to get started with GlitchTip.</p
+          >
           <form
             [formGroup]="form"
             (ngSubmit)="onSubmit()"
             id="create-organization-form"
           >
-            <mat-error *ngIf="error">{{ error }}</mat-error>
+            <mat-error *ngIf="error$ | async as error">{{ error }}</mat-error>
             <mat-form-field>
-              <input matInput formControlName="name" placeholder="Name" />
+              <input
+                matInput
+                formControlName="name"
+                placeholder="Name"
+                i18n-placeholder
+              />
             </mat-form-field>
-            <button id="submit" mat-flat-button color="primary">
-              Create Organization
-            </button>
+            <button id="submit" mat-flat-button color="primary" i18n
+              >Create Organization</button
+            >
           </form>
         </ng-container>
-        <ng-template #elseBlock>
-          Registration has been disabled on this instance of GlitchTip. Contact
-          an administrator to be invited into an existing organization.
+        <ng-template #elseBlock i18n>
+          Organization creation has been disabled on this instance of GlitchTip.
+          Contact an administrator to be invited into an existing organization.
         </ng-template>
       </ng-container>
     </mat-card-content>

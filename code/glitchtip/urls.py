@@ -66,7 +66,7 @@ urlpatterns = [
         TemplateView.as_view(template_name="robots.txt", content_type="text/plain"),
     ),
     path("api/", RedirectView.as_view(url="/profile/auth-tokens")),
-    path("api/0/", APIRootView.as_view()),
+    path("api/0/", APIRootView.as_view(), name="api-root-view"),
     path("api/0/", include(router.urls)),
 ]
 
@@ -79,13 +79,14 @@ urlpatterns += [
     path("api/0/", include("projects.urls")),
     path("api/0/", include("issues.urls")),
     path("api/0/", include("users.urls")),
-    path("api/0/", include("glitchtip.stats.urls")),
     path("api/0/", include("organizations_ext.urls")),
     path("api/0/", include("teams.urls")),
     path("api/0/", include("api_tokens.urls")),
     path("api/0/", include("files.urls")),
-    path("api/0/", include("glitchtip.uptime.urls")),
     path("api/0/", include("difs.urls")),
+    path("api/0/", include("glitchtip.importer.urls")),
+    path("api/0/", include("glitchtip.stats.urls")),
+    path("api/0/", include("glitchtip.uptime.urls")),
     path("api/0/", include("glitchtip.wizard.urls")),
     path("api/mfa/", include("django_rest_mfa.urls")),
     path("api/", include("events.urls")),
@@ -141,15 +142,8 @@ if settings.BILLING_ENABLED:
 if settings.ENABLE_TEST_API:
     urlpatterns.append(path("api/test/", include("test_api.urls")))
 
-if settings.DEBUG:
-    import debug_toolbar
+if settings.DEBUG_TOOLBAR:
+    urlpatterns.append(path("__debug__/", include("debug_toolbar.urls")))
 
-    urlpatterns = (
-        [
-            path("__debug__/", include(debug_toolbar.urls)),
-            # For django versions before 2.0:
-            # url(r'^__debug__/', include(debug_toolbar.urls)),
-        ]
-        + urlpatterns
-        + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-    )
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

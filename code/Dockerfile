@@ -3,12 +3,13 @@ ARG IS_CI
 ENV PYTHONUNBUFFERED=1 \
   PORT=8080 \
   POETRY_VIRTUALENVS_CREATE=false \
+  POETRY_HOME=/opt/poetry \
   PIP_DISABLE_PIP_VERSION_CHECK=on
 
-RUN pip install poetry
 WORKDIR /code
+RUN curl -sSL https://install.python-poetry.org | python3 -
 COPY poetry.lock pyproject.toml /code/
-RUN poetry install --no-interaction --no-ansi $(test "$IS_CI" = "True" && echo "--no-dev")
+RUN $POETRY_HOME/bin/poetry install --no-interaction --no-ansi $(test "$IS_CI" = "True" && echo "--no-dev")
 
 FROM python:3.10-slim
 ARG GLITCHTIP_VERSION=local
@@ -29,7 +30,7 @@ COPY . /code/
 ARG COLLECT_STATIC
 RUN if [ "$COLLECT_STATIC" != "" ] ; then SECRET_KEY=ci ./manage.py collectstatic --noinput; fi
 
-RUN useradd -u 5000 app && chown app:app /code
+RUN useradd -u 5000 app && chown app:app /code && chown app:app /code/uploads
 USER app:app
 
 CMD ["./bin/start.sh"]

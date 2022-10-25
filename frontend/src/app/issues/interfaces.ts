@@ -123,6 +123,7 @@ export interface Breadcrumb {
 
 export interface Message {
   formatted: string;
+  params?: string[] | { [key: string]: string };
 }
 
 export interface CSP {
@@ -304,7 +305,7 @@ export interface Frame {
   symbolAddr: string | null;
   trust: string | null;
   inApp: boolean;
-  context: (string | number)[][];
+  context: (string | number)[][] | null;
   vars: { [key: string]: Json } | null;
   errors?: string | null;
   lineNo: number | null;

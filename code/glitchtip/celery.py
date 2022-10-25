@@ -1,10 +1,8 @@
 import os
 
 from celery import Celery
-from dotenv import load_dotenv
 
 # set the default Django settings module for the 'celery' program.
-load_dotenv()
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "glitchtip.settings")
 
 app = Celery("glitchtip")

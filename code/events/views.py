@@ -3,10 +3,12 @@ import logging
 import random
 import string
 import uuid
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation, ValidationError
 from django.db.models import Exists, OuterRef
+from django.db.utils import IntegrityError
 from django.http import HttpResponse
 from django.test import RequestFactory
 from rest_framework import exceptions, permissions, status
@@ -14,8 +16,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from sentry_sdk import capture_exception, set_context, set_level
 
-from difs.tasks import difs_run_resolve_stacktrace
 from difs.models import DebugInformationFile
+from difs.tasks import difs_run_resolve_stacktrace
 from performance.serializers import TransactionEventSerializer
 from projects.models import Project
 from sentry.utils.auth import parse_auth_header
@@ -83,6 +85,14 @@ class BaseEventAPIView(APIView):
             result = parse_auth_header(request.META["HTTP_AUTHORIZATION"])
 
         if not result:
+            if (
+                isinstance(request.data, list)
+                and len(request.data)
+                and "dsn" in request.data[0]
+            ):
+                dsn = urlparse(request.data[0]["dsn"])
+                if username := dsn.username:
+                    return username
             raise exceptions.NotAuthenticated(
                 "Unable to find authentication information"
             )
@@ -100,8 +110,8 @@ class BaseEventAPIView(APIView):
                 .only("id", "first_event", "organization__is_accepting_events")
                 .first()
             )
-        except ValidationError as e:
-            raise exceptions.AuthenticationFailed({"error": "Invalid api key"})
+        except ValidationError as err:
+            raise exceptions.AuthenticationFailed({"error": "Invalid api key"}) from err
         if not project:
             if Project.objects.filter(id=project_id).exists():
                 raise exceptions.AuthenticationFailed({"error": "Invalid api key"})
@@ -110,8 +120,10 @@ class BaseEventAPIView(APIView):
             raise exceptions.Throttled(detail="event rejected due to rate limit")
         return project
 
-    def get_event_serializer_class(self, data=[]):
+    def get_event_serializer_class(self, data=None):
         """Determine event type and return serializer"""
+        if data is None:
+            data = []
         if "exception" in data and data["exception"]:
             return StoreErrorSerializer
         if "platform" not in data:
@@ -125,9 +137,9 @@ class BaseEventAPIView(APIView):
         )
         try:
             serializer.is_valid(raise_exception=True)
-        except exceptions.ValidationError as e:
+        except exceptions.ValidationError as err:
             set_level("warning")
-            capture_exception(e)
+            capture_exception(err)
             logger.warning("Invalid event %s", serializer.errors)
             return Response()
         event = serializer.save()
@@ -138,13 +150,18 @@ class BaseEventAPIView(APIView):
 
 class EventStoreAPIView(BaseEventAPIView):
     def post(self, request, *args, **kwargs):
+        if settings.MAINTENANCE_EVENT_FREEZE:
+            return Response(
+                {"message": "Events are not currently being accepted due to database maintenance."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
         if settings.EVENT_STORE_DEBUG:
             print(json.dumps(request.data))
         try:
             project = self.get_project(request, kwargs.get("id"))
-        except exceptions.AuthenticationFailed as e:
+        except exceptions.AuthenticationFailed as err:
             # Replace 403 status code with 401 to match OSS Sentry
-            return Response(e.detail, status=401)
+            return Response(err.detail, status=401)
         return self.process_event(request.data, request, project)
 
 
@@ -159,13 +176,19 @@ class EnvelopeAPIView(BaseEventAPIView):
         return TransactionEventSerializer
 
     def post(self, request, *args, **kwargs):
+        if settings.MAINTENANCE_EVENT_FREEZE:
+            return Response(
+                {"message": "Events are not currently being accepted due to database maintenance."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
         if settings.EVENT_STORE_DEBUG:
             print(json.dumps(request.data))
         project = self.get_project(request, kwargs.get("id"))
 
         data = request.data
         if len(data) < 2:
-            raise ValidationError("Envelope has no headers")
+            logger.warning("Envelope has no headers %s", data)
+            raise exceptions.ValidationError("Envelope has no headers")
         event_header_serializer = EnvelopeHeaderSerializer(data=data.pop(0))
         event_header_serializer.is_valid(raise_exception=True)
         # Multi part envelopes are not yet supported
@@ -174,8 +197,16 @@ class EnvelopeAPIView(BaseEventAPIView):
             serializer = self.get_serializer_class()(
                 data=data.pop(0), context={"request": self.request, "project": project}
             )
-            serializer.is_valid(raise_exception=True)
-            event = serializer.save()
+            try:
+                serializer.is_valid(raise_exception=True)
+            except exceptions.ValidationError as err:
+                logger.warning("Invalid envelope payload", exc_info=True)
+                raise err
+            try:
+                event = serializer.save()
+            except IntegrityError as err:
+                logger.warning("Duplicate event id", exc_info=True)
+                raise exceptions.ValidationError("Duplicate event id") from err
             return Response({"id": event.event_id_hex})
         elif message_header.get("type") == "event":
             event_data = data.pop(0)

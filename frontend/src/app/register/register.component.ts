@@ -31,7 +31,6 @@ export class RegisterComponent implements OnInit {
     ]),
   });
   acceptInfo$ = this.acceptService.acceptInfo$;
-  enableUserRegistration$ = this.settings.enableUserRegistration$;
 
   constructor(
     private registerService: RegisterService,
@@ -40,13 +39,7 @@ export class RegisterComponent implements OnInit {
     private acceptService: AcceptInviteService,
     private settings: SettingsService,
     private oauthService: GlitchTipOAuthService
-  ) {
-    this.enableUserRegistration$.subscribe(event => {
-      if (!event) {
-        window.location.href = '/';
-      }
-    });
-  }
+  ) {}
 
   ngOnInit() {
     this.tags = getUTM().toString();

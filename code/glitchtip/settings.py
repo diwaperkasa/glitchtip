@@ -95,6 +95,9 @@ GLITCHTIP_MAX_FILE_LIFE_DAYS = env.int(
     "GLITCHTIP_MAX_EVENT_LIFE_DAYS", default=GLITCHTIP_MAX_EVENT_LIFE_DAYS * 2
 )
 
+# Freezes acceptance of new events, for use during db maintenance
+MAINTENANCE_EVENT_FREEZE = env.bool("MAINTENANCE_EVENT_FREEZE", False)
+
 # For development purposes only, prints out inbound event store json
 EVENT_STORE_DEBUG = env.bool("EVENT_STORE_DEBUG", False)
 
@@ -148,6 +151,7 @@ def show_toolbar(request):
     return env("DEBUG_TOOLBAR")
 
 
+DEBUG_TOOLBAR = env("DEBUG_TOOLBAR")
 DEBUG_TOOLBAR_CONFIG = {"SHOW_TOOLBAR_CALLBACK": show_toolbar}
 DEBUG_TOOLBAR_PANELS = [
     "debug_toolbar.panels.versions.VersionsPanel",
@@ -188,11 +192,15 @@ INSTALLED_APPS = [
     "django_filters",
     "django_extensions",
     "django_rest_mfa",
-    "debug_toolbar",
+]
+if DEBUG_TOOLBAR:
+    INSTALLED_APPS.append("debug_toolbar")
+INSTALLED_APPS += [
     "rest_framework",
     "drf_yasg",
     "dj_rest_auth",
     "dj_rest_auth.registration",
+    "import_export",
     "storages",
     "glitchtip",
     "alerts",
@@ -204,6 +212,7 @@ INSTALLED_APPS = [
     "issues",
     "users",
     "user_reports",
+    "glitchtip.importer",
     "glitchtip.uptime",
     "performance",
     "projects",
@@ -227,13 +236,17 @@ MIDDLEWARE = [
     "csp.middleware.CSPMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    "debug_toolbar.middleware.DebugToolbarMiddleware",
+]
+if DEBUG_TOOLBAR:
+    MIDDLEWARE.append("debug_toolbar.middleware.DebugToolbarMiddleware")
+MIDDLEWARE += [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "sentry.middleware.proxy.DecompressBodyMiddleware",
+    "django.middleware.locale.LocaleMiddleware",
 ]
 
 if ENABLE_OBSERVABILITY_API:
@@ -266,6 +279,13 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-sentry-auth",
 ]
 
+BILLING_ENABLED = False
+if env.str("STRIPE_TEST_PUBLIC_KEY", None) or env.str("STRIPE_LIVE_PUBLIC_KEY", None):
+    BILLING_ENABLED = True
+
+# Set to chatwoot website token to enable live help widget. Assumes app.chatwoot.com.
+CHATWOOT_WEBSITE_TOKEN = env.str("CHATWOOT_WEBSITE_TOKEN", None)
+
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", str, [])
 SECURE_BROWSER_XSS_FILTER = True
 CSP_DEFAULT_SRC = env.list("CSP_DEFAULT_SRC", str, ["'self'"])
@@ -282,20 +302,24 @@ CSP_FONT_SRC = env.list(
 )
 # Redoc requires blob
 CSP_WORKER_SRC = env.list("CSP_WORKER_SRC", str, ["'self'", "blob:"])
-# GlitchTip can record it's own errors
-CSP_CONNECT_SRC = env.list(
-    "CSP_CONNECT_SRC",
-    str,
-    ["'self'", "https://*.glitchtip.com", "https://app.chatwoot.com"],
-)
-# Needed for Analytics and Stripe for SaaS use cases. Both are disabled by default.
-CSP_SCRIPT_SRC = env.list(
-    "CSP_SCRIPT_SRC",
-    str,
-    ["'self'", "https://*.glitchtip.com", "https://js.stripe.com"],
-)
+
+# Enable Chatwoot only when configured
+default_connect_src = ["'self'", "https://*.glitchtip.com"]
+if CHATWOOT_WEBSITE_TOKEN:
+    default_connect_src.append("https://app.chatwoot.com")
+CSP_CONNECT_SRC = env.list("CSP_CONNECT_SRC", str, default_connect_src)
+
+# Enable stripe by default only when configured
+stripe_domain = "https://js.stripe.com"
+default_script_src = ["'self'", "https://*.glitchtip.com"]
+default_frame_src = ["'self'"]
+if BILLING_ENABLED:
+    default_script_src.append(stripe_domain)
+    default_frame_src.append(stripe_domain)
+
+CSP_SCRIPT_SRC = env.list("CSP_SCRIPT_SRC", str, default_script_src)
 CSP_IMG_SRC = env.list("CSP_IMG_SRC", str, ["'self'"])
-CSP_FRAME_SRC = env.list("CSP_FRAME_SRC", str, ["'self'", "https://js.stripe.com"])
+CSP_FRAME_SRC = env.list("CSP_FRAME_SRC", str, default_frame_src)
 # Consider tracking CSP reports with GlitchTip itself
 CSP_REPORT_URI = env.tuple("CSP_REPORT_URI", str, None)
 CSP_REPORT_ONLY = env.bool("CSP_REPORT_ONLY", False)
@@ -355,8 +379,19 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
     "fanout_prefix": True,
     "fanout_patterns": True,
 }
+if CELERY_BROKER_URL.startswith("sentinel"):
+    CELERY_BROKER_TRANSPORT_OPTIONS["master_name"] = env.str(
+        "CELERY_BROKER_MASTER_NAME", "mymaster"
+    )
+if socket_timeout := env.int("CELERY_BROKER_SOCKET_TIMEOUT", None):
+    CELERY_BROKER_TRANSPORT_OPTIONS["socket_timeout"] = socket_timeout
+if broker_sentinel_password := env.str("CELERY_BROKER_SENTINEL_KWARGS_PASSWORD", None):
+    CELERY_BROKER_TRANSPORT_OPTIONS["sentinel_kwargs"] = {
+        "password": broker_sentinel_password
+    }
 
 CELERY_RESULT_BACKEND = "django-db"
+CELERY_RESULT_EXTENDED = True
 CELERY_CACHE_BACKEND = "django-cache"
 CELERY_BEAT_SCHEDULE = {
     "send-alert-notifications": {
@@ -396,6 +431,20 @@ else:  # Default to REDIS when unset
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
             "LOCATION": REDIS_URL,
         }
+    }
+if cache_sentinel_url := env.str("CACHE_SENTINEL_URL", None):
+    try:
+        cache_sentinel_host, cache_sentinel_port = cache_sentinel_url.split(":")
+        SENTINELS = [(cache_sentinel_host, int(cache_sentinel_port))]
+    except ValueError as err:
+        raise ImproperlyConfigured(
+            "Invalid cache redis sentinel url, format is host:port"
+        ) from err
+    DJANGO_REDIS_CONNECTION_FACTORY = "django_redis.pool.SentinelConnectionFactory"
+    CACHES["default"]["OPTIONS"]["SENTINELS"] = SENTINELS
+if cache_sentinel_password := env.str("CACHE_SENTINEL_PASSWORD", None):
+    CACHES["default"]["OPTIONS"]["SENTINEL_KWARGS"] = {
+        "password": cache_sentinel_password
     }
 
 
@@ -475,7 +524,25 @@ STATICFILES_STORAGE = env("STATICFILES_STORAGE")
 EMAIL_BACKEND = env.str(
     "EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend"
 )
-if os.getenv("EMAIL_URL"):
+if os.getenv("EMAIL_HOST_USER"):
+    EMAIL_HOST_USER = env.str("EMAIL_HOST_USER")
+if os.getenv("EMAIL_HOST_PASSWORD"):
+    EMAIL_HOST_PASSWORD = env.str("EMAIL_HOST_PASSWORD")
+if os.getenv("EMAIL_HOST"):
+    EMAIL_HOST = env.str("EMAIL_HOST")
+if os.getenv("EMAIL_PORT"):
+    EMAIL_PORT = env.str("EMAIL_PORT")
+if os.getenv("EMAIL_USE_TLS"):
+    EMAIL_USE_TLS = env.str("EMAIL_USE_TLS")
+if os.getenv("EMAIL_USE_SSL"):
+    EMAIL_USE_SSL = env.str("EMAIL_USE_SSL")
+if os.getenv("EMAIL_TIMEOUT"):
+    EMAIL_TIMEOUT = env.str("EMAIL_TIMEOUT")
+if os.getenv("EMAIL_FILE_PATH"):
+    EMAIL_FILE_PATH = env.str("EMAIL_FILE_PATH")
+if os.getenv(
+    "EMAIL_URL"
+):  # Careful, this will override most EMAIL_*** settings. Set them all individually, or use EMAIL_URL to set them all at once, but don't do both.
     EMAIL_CONFIG = env.email_url("EMAIL_URL")
     vars().update(EMAIL_CONFIG)
 
@@ -485,19 +552,16 @@ ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_USERNAME_REQUIRED = False
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_ADAPTER = "glitchtip.social.MFAAccountAdapter"
+SOCIALACCOUNT_ADAPTER = "glitchtip.social.CustomSocialAccountAdapter"
 INVITATION_BACKEND = "organizations_ext.invitation_backend.InvitationBackend"
 SOCIALACCOUNT_PROVIDERS = {}
-GITLAB_URL = env.url("SOCIALACCOUNT_PROVIDERS_gitlab_GITLAB_URL", None)
-if GITLAB_URL:
+if GITLAB_URL := env.url("SOCIALACCOUNT_PROVIDERS_gitlab_GITLAB_URL", None):
     SOCIALACCOUNT_PROVIDERS["gitlab"] = {"GITLAB_URL": GITLAB_URL.geturl()}
-GITEA_URL = env.url("SOCIALACCOUNT_PROVIDERS_gitea_GITEA_URL", None)
-if GITEA_URL:
+if GITEA_URL := env.url("SOCIALACCOUNT_PROVIDERS_gitea_GITEA_URL", None):
     SOCIALACCOUNT_PROVIDERS["gitea"] = {"GITEA_URL": GITEA_URL.geturl()}
-NEXTCLOUD_URL = env.url("SOCIALACCOUNT_PROVIDERS_nextcloud_SERVER", None)
-if NEXTCLOUD_URL:
+if NEXTCLOUD_URL := env.url("SOCIALACCOUNT_PROVIDERS_nextcloud_SERVER", None):
     SOCIALACCOUNT_PROVIDERS["nextcloud"] = {"SERVER": NEXTCLOUD_URL.geturl()}
-KEYCLOAK_URL = env.url("SOCIALACCOUNT_PROVIDERS_keycloak_KEYCLOAK_URL", None)
-if KEYCLOAK_URL:
+if KEYCLOAK_URL := env.url("SOCIALACCOUNT_PROVIDERS_keycloak_KEYCLOAK_URL", None):
     alt_url_env = env.url("SOCIALACCOUNT_PROVIDERS_keycloak_KEYCLOAK_URL_ALT", None)
 
     if alt_url_env:
@@ -527,9 +591,14 @@ REST_AUTH_REGISTER_SERIALIZERS = {
 REST_AUTH_TOKEN_MODEL = None
 REST_AUTH_TOKEN_CREATOR = "users.utils.noop_token_creator"
 
-# By default (False) only the first user, superuser, or organization owners may register
-# and create an organization. Other users must be invited. Intended for private instances
-ENABLE_OPEN_USER_REGISTRATION = env.bool("ENABLE_OPEN_USER_REGISTRATION", False)
+ENABLE_USER_REGISTRATION = env.bool("ENABLE_USER_REGISTRATION", True)
+ENABLE_ORGANIZATION_CREATION = env.bool(
+    "ENABLE_OPEN_USER_REGISTRATION", env.bool("ENABLE_ORGANIZATION_CREATION", False)
+)
+
+REST_AUTH_REGISTER_PERMISSION_CLASSES = (
+    ("glitchtip.permissions.UserRegistrationPermission"),
+)
 
 AUTHENTICATION_BACKENDS = (
     # Needed to login by username in Django admin, regardless of `allauth`
@@ -615,9 +684,6 @@ def organization_request_callback(request):
 PLAUSIBLE_URL = env.str("PLAUSIBLE_URL", default=None)
 PLAUSIBLE_DOMAIN = env.str("PLAUSIBLE_DOMAIN", default=None)
 
-# Set to chatwoot website token to enable live help widget. Assumes app.chatwoot.com.
-CHATWOOT_WEBSITE_TOKEN = env.str("CHATWOOT_WEBSITE_TOKEN", None)
-
 # Is running unit test
 TESTING = len(sys.argv) > 1 and sys.argv[1] == "test"
 
@@ -632,10 +698,8 @@ DJSTRIPE_SUBSCRIBER_MODEL_REQUEST_CALLBACK = organization_request_callback
 DJSTRIPE_USE_NATIVE_JSONFIELD = True
 DJSTRIPE_FOREIGN_KEY_TO_FIELD = "djstripe_id"
 STRIPE_AUTOMATIC_TAX = env.bool("STRIPE_AUTOMATIC_TAX", False)
-BILLING_ENABLED = False
 STRIPE_LIVE_MODE = env.bool("STRIPE_LIVE_MODE", False)
-if env.str("STRIPE_TEST_PUBLIC_KEY", None) or env.str("STRIPE_LIVE_PUBLIC_KEY", None):
-    BILLING_ENABLED = True
+if BILLING_ENABLED:
     I_PAID_FOR_GLITCHTIP = True
     INSTALLED_APPS.append("djstripe")
     INSTALLED_APPS.append("djstripe_ext")
@@ -677,7 +741,7 @@ if CELERY_TASK_ALWAYS_EAGER:
         }
     }
 
-MFA_SERVER_NAME = "GlitchTip"
+MFA_SERVER_NAME = GLITCHTIP_URL.hostname
 FIDO_SERVER_ID = GLITCHTIP_URL.hostname
 
 # Workaround for error encountered at build time (source: https://github.com/axnsan12/drf-yasg/issues/761#issuecomment-1014530805)
