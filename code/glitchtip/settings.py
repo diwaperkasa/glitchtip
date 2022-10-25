@@ -23,6 +23,9 @@ from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 from sentry_sdk.integrations.django import DjangoIntegration
 from whitenoise.storage import CompressedManifestStaticFilesStorage
+from dotenv import load_dotenv
+
+load_dotenv()
 
 env = environ.Env(
     ALLOWED_HOSTS=(list, ["*"]),
