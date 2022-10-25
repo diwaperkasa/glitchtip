@@ -1,0 +1,123 @@
+@use '@angular/material' as mat;
+@import "variables";
+
+// This make the app cover the whole screen at all times
+mat-sidenav-container {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+mat-sidenav {
+  width: 240px;
+}
+
+.logo-toolbar {
+  background-color: transparent;
+
+  .main-logo {
+    width: 115px;
+    cursor: pointer;
+  }
+}
+
+.sub-items {
+  display: none !important;
+
+  @media (max-width: $tablet - 1) {
+    display: block !important;
+    margin-left: 24px;
+    max-width: calc(100% - 24px);
+    color: mat.get-color-from-palette(mat.$gray-palette, 600);
+  }
+}
+
+mat-sidenav-content {
+  mat-toolbar {
+    display: none;
+    cursor: pointer; // The whole toolbar is clickable
+
+    @media (max-width: $tablet - 1) {
+      display: flex;
+      padding-left: 0;
+    }
+
+    .sidenav-toggle {
+      height: 100%;
+      transform: translateY(-1px);
+    }
+  }
+}
+
+.overflow {
+  text-overflow: ellipsis;
+  overflow: hidden;
+  max-height: 40px;
+  line-height: 1.11111;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.down-caret {
+  transform: scale(1, 0.5);
+  margin-left: 8px;
+}
+
+.org-details-divider {
+  margin: 10px 0;
+}
+
+.org-dropdown-list-item ::ng-deep .mat-list-item-content {
+  justify-content: space-between;
+}
+
+.mat-nav-list > button.mat-menu-item,
+.no-org-create {
+  font-weight: 500;
+}
+
+.mat-list-item-disabled {
+  background-color: white;
+  color: mat.get-color-from-palette(mat.$gray-palette, 500) !important;
+}
+
+.subdued {
+  color: mat.get-color-from-palette(mat.$gray-palette, 700);
+  font-weight: 300;
+}
+
+.nagware {
+  margin: 10px;
+  font-size: 0.8em;
+
+  h3 {
+    font-size: 0.8em;
+    margin-bottom: 0.5em;
+  }
+
+  button {
+    position: absolute;
+    top: 0;
+    right: 0;
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    margin: 0;
+    padding: 5px;
+  }
+
+  ul {
+    padding-left: 15px;
+  }
+
+  li {
+    padding-left: 0;
+  }
+
+  mat-icon {
+    font-size: 20px;
+  }
+}

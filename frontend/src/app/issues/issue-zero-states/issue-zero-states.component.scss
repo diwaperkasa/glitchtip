@@ -1,0 +1,68 @@
+@use '@angular/material' as mat;
+@import "variables";
+
+.empty-states {
+  padding: 1.5em 0 0.5em;
+}
+
+.not-on-team {
+  background: mat.get-color-from-palette($amaranth-palette, 50);
+  padding: 10px;
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+markdown {
+  display: block;
+  margin-bottom: 40px;
+}
+
+.install-wrapper {
+  display: flex;
+
+  @media (max-width: $medium - 1) {
+    flex-direction: column;
+  }
+}
+
+.install-instructions {
+  width: calc(100% - 300px);
+  flex-shrink: 0;
+
+  @media (max-width: $large - 1) {
+    width: calc(100% - 250px);
+  }
+
+  @media (max-width: $medium - 1) {
+    width: 100%;
+  }
+}
+
+.dsn {
+  width: 300px;
+  padding-left: 30px;
+  flex-shrink: 0;
+
+  @media (max-width: $large - 1) {
+    width: 250px;
+  }
+
+  @media (max-width: $medium - 1) {
+    width: 100%;
+    padding-left: 0;
+    padding-top: 30px;
+  }
+
+  .mat-body-1 {
+    margin: 0;
+  }
+
+  .dsn-input {
+    width: 100%;
+    margin-bottom: 30px;
+  }
+}
+
+.dsn-area {
+  padding-top: 1em;
+}

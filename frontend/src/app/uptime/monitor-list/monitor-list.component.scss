@@ -1,0 +1,89 @@
+@import "variables";
+
+$iconWidth: 56px;
+
+.top-content {
+  display: flex;
+  justify-content: space-between;
+}
+
+table {
+  width: 100%;
+}
+
+.wrapper {
+  width: 100%;
+}
+
+.name-and-url {
+  width: 500px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+
+  @media screen and (max-width: $large - 1) {
+    width: 300px;
+  }
+  @media screen and (max-width: $medium - 1) {
+    width: 200px;
+  }
+  @media screen and (max-width: $tablet - 1) {
+    width: 160px;
+  }
+
+  a {
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    display: block;
+    max-width: fit-content;
+  }
+
+  div {
+    width: inherit;
+
+    .mat-caption {
+      color: inherit;
+    }
+  }
+}
+
+.chart-container{
+  @media screen and (max-width: $small - 1) {
+    display: none;
+  }
+
+  .monitor-chart{
+    margin-left: 10px;
+  }
+}
+
+.status {
+  @media screen and (max-width: $small - 1) {
+    padding-left: 40px;
+  }
+}
+
+.status-color {
+  position: relative;
+  &:after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+  }
+
+  &--true:after {
+    background-color: #54a65a;
+  }
+
+  &--false:after {
+    background-color: $amaranth;
+  }
+
+  // For monitors that do not yet have a check
+  &--:after {
+    background-color: gray;
+  }
+}

@@ -1,0 +1,115 @@
+@import "variables";
+
+.mat-h1 {
+  padding-right: 20px;
+}
+
+.issue-404 h1 {
+  text-align: left;
+}
+
+header {
+  margin: -16px 0 5px;
+
+  @media screen and (max-width: $tablet - 1) {
+    margin-bottom: 20px;
+  }
+
+  .header-group {
+    display: flex;
+    justify-content: space-between;
+
+    @media screen and (max-width: $tablet - 1) {
+      flex-direction: column;
+    }
+  }
+
+  .button-row button {
+    margin-right: 8px;
+  }
+
+  gt-issue-detail-title {
+    margin-right: 20px;
+  }
+}
+
+dl {
+  margin-top: 0;
+
+  > div {
+    margin-bottom: 15px;
+  }
+
+  // this was done to mimic a table I removed, design preferences
+  // aren't set in stone here
+  dt {
+    font-weight: 500;
+    opacity: 0.54;
+    margin: 2px 0;
+  }
+
+  dd {
+    margin: 0;
+  }
+}
+
+.event-detail-card {
+  margin-right: 16px;
+
+  @media screen and (max-width: $medium - 1) {
+    margin-right: 0;
+  }
+
+  > .tabbed-nav {
+    margin: -16px -16px 16px;
+  }
+}
+
+mat-grid-list {
+  height: 90vh;
+}
+
+.tags {
+  display: flex;
+  justify-content: space-between;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 30px;
+
+  @media screen and (max-width: $medium - 1) {
+    flex-direction: column-reverse;
+  }
+
+  .left {
+    flex: 75%;
+    overflow: hidden;
+
+    @media screen and (max-width: $medium - 1) {
+      width: 100%;
+    }
+  }
+
+  .right {
+    flex: 25%;
+
+    @media screen and (max-width: $medium - 1) {
+      width: 100%;
+      margin-bottom: 30px;
+    }
+  }
+}
+
+table.mat-table {
+  background: none;
+}
+
+.project-issues-link {
+  margin: 0 0 20px;
+}
+
+.report-badge > span {
+  text-overflow: initial;
+}

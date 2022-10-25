@@ -1,0 +1,79 @@
+@use '@angular/material' as mat;
+@import "variables";
+
+.exception {
+  margin-bottom: 16px;
+
+  .header-wrapper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+
+    @media screen and (max-width: $small - 1) {
+      flex-direction: column;
+    }
+  }
+  .text-wrapper {
+    display: flex;
+  }
+
+  .spacer {
+    margin-left: 8px;
+  }
+
+  .subtitle {
+    margin-bottom: 24px;
+  }
+
+  .yes {
+    border: 2px solid green;
+  }
+
+  .no {
+    border: 2px solid red;
+  }
+
+  .raw {
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+
+  .full {
+    h2 {
+      margin-top: 0;
+      margin-bottom: 0;
+    }
+  }
+
+  mat-chip-list {
+    display: block;
+    margin-bottom: 24px;
+  }
+
+  mat-accordion::ng-deep .mat-expansion-panel-body {
+    padding-top: 16px;
+  }
+
+  mat-expansion-panel:not(:last-child) mat-expansion-panel-header {
+    margin-bottom: -1px;
+  }
+
+  mat-expansion-panel-header {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    border: 1px solid mat.get-color-from-palette(mat.$gray-palette, 300);
+
+    gt-frame-title {
+      padding-right: 16px;
+    }
+  }
+
+  .disabled-panel {
+    color: mat.get-color-from-palette(mat.$gray-palette, 900);
+  }
+
+  .highlighted {
+    background: mat.get-color-from-palette(mat.$gray-palette, 100);
+  }
+}

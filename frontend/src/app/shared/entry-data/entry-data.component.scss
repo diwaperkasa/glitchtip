@@ -1,0 +1,44 @@
+@use '@angular/material' as mat;
+@import "variables";
+
+$left-column-width: 30%;
+
+:host {
+  display: block;
+  clear: both;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+dt {
+  float: left;
+  width: $left-column-width;
+  padding-right: 16px;
+  padding-top: 7px;
+
+  @media screen and (max-width: $small - 1) {
+    float: none;
+    width: 100%;
+    padding-right: 0;
+    padding-top: 0;
+    padding-bottom: 3px;
+  }
+}
+
+dd {
+  margin-left: $left-column-width;
+  width: 70%;
+  min-height: 36px;
+  word-wrap: break-word;
+  padding: 8px;
+  font-family: $font-mono;
+  background-color: mat.get-color-from-palette(mat.$gray-palette, 100);
+  border-radius: 3px;
+
+  @media screen and (max-width: $small - 1) {
+    float: none;
+    width: 100%;
+    margin-left: 0;
+    margin-bottom: 12px;
+  }
+}

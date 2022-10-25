@@ -1,0 +1,82 @@
+@import "variables";
+
+.mat-list-base .mat-list-item {
+  height: auto;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+
+  ::ng-deep .mat-list-item-content {
+    padding-left: 0;
+    padding-right: 0;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+}
+
+.email-info {
+  padding-top: 8px;
+  margin-bottom: 4px;
+
+  span {
+    margin-right: 16px;
+  }
+}
+
+.email-actions {
+  margin-top: 4px;
+  padding-bottom: 8px;
+}
+
+mat-chip-list {
+  display: inline-block;
+  margin-right: 15px;
+  pointer-events: none;
+  user-select: none;
+}
+
+mat-chip {
+  font-size: 0.8em;
+  padding: 0 10px;
+  min-height: 24px;
+}
+
+.delete-spinner-container {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.add-email-form-ui {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 7px;
+
+  @media (max-width: $large - 1) {
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: $medium - 1) {
+    flex-direction: column;
+  }
+
+  .mat-form-field {
+    flex: 1;
+    margin-right: 15px;
+  }
+
+  ::ng-deep .mat-form-field-wrapper {
+    max-width: 400px;
+  }
+
+  gt-loading-button {
+    margin-top: 12px;
+
+    @media (max-width: $medium - 1) {
+      margin-top: 8px;
+    }
+  }
+}

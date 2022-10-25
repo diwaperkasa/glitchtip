@@ -1,0 +1,61 @@
+@import "variables";
+
+mat-card {
+  margin-top: 24px;
+  margin-bottom: 24px;
+
+  mat-card-content {
+    padding-top: 16px;
+  }
+}
+
+.basics-content {
+  display: flex;
+  justify-content: space-between;
+
+  @media (max-width: $tablet - 1) {
+    flex-direction: column;
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+
+    .column {
+      margin-top: 8px;
+      margin-bottom: 8px;
+    }
+  }
+}
+
+form {
+  text-align: center;
+
+  div {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+}
+
+mat-radio-group {
+  margin-top: 24px;
+  margin-bottom: 24px;
+
+  mat-radio-button {
+    margin-right: 32px;
+  }
+}
+
+mat-list {
+  padding-top: 0;
+
+  .mat-list-item {
+    &:nth-last-child(n + 2) {
+      border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+    }
+
+    ::ng-deep .mat-list-item-content {
+      padding-left: 0;
+      padding-right: 0;
+    }
+  }
+}

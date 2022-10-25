@@ -1,0 +1,75 @@
+@import "variables";
+
+mat-card {
+  margin-top: 24px;
+  margin-bottom: 24px;
+}
+
+mat-error {
+  margin-bottom: 10px;
+  display: block;
+}
+
+.visualization {
+  position: relative;
+  margin: -10px 0 20px;
+  font-size: 0.9em;
+  font-weight: 500;
+
+  .error {
+    color: $amaranth;
+  }
+
+  .uptime {
+    color: #8a2387;
+  }
+
+  .performance {
+    color: #f27121;
+  }
+}
+
+.display-bar {
+  background-color: #f4c6cd;
+  width: 100%;
+  height: 8px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: flex-start;
+
+  .error-event {
+    background-color: $amaranth;
+  }
+
+  .transaction-event {
+    background-color: #f27121;
+  }
+
+  .uptime-event {
+    background-color: #8a2387;
+  }
+
+  .file-size-percent {
+    background-color: black;
+  }
+}
+
+.total-events {
+  text-align: right;
+  margin-top: 10px;
+}
+
+.event-count {
+  display: inline-block;
+  position: relative;
+  transform: translateX(-50%);
+
+  &--left {
+    transform: translateX(0);
+  }
+
+  &--right {
+    transform: translateX(-100%);
+  }
+}

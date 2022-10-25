@@ -1,0 +1,67 @@
+@use '@angular/material' as mat;
+@import "variables";
+
+form {
+  padding-bottom: 8px;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  .mat-form-field {
+    width: 88px;
+  }
+  gt-loading-button {
+    margin-bottom: 8px;
+  }
+}
+
+// Move to global styles if we decide to implement in other places in app
+.tooltip {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: mat.get-color-from-palette(mat.$gray-palette, 500);
+  cursor: help;
+}
+
+.mat-form-field {
+  margin-left: 12px;
+  margin-right: 12px;
+}
+
+.mat-form-field ::ng-deep .mat-form-field-subscript-wrapper {
+  width: 150px;
+}
+
+.underline {
+  &::ng-deep .mat-button-toggle-label-content {
+    text-decoration: underline;
+  }
+}
+
+.mat-checkbox {
+  span {
+    margin-top: 10px;
+  }
+}
+
+.uptime-option {
+  margin-top: 12px;
+}
+
+.error {
+  color: #f44336;
+  text-align: center;
+  margin-top: -15px;
+  margin-bottom: 5px;
+
+  @media screen and (max-width: $medium - 1) {
+    margin-top: 5px;
+    margin-bottom: 5px;
+  }
+}
+
+.update {
+  @media screen and (max-width: $large - 1) {
+    margin-top: 10px;
+  }
+}
