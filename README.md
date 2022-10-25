@@ -20,5 +20,5 @@ pm2 start --name glitchtip --interpreter python3 code/manage.py -- runserver
 ```
 
 ```
-pm2 start --name glitchtip-celery sh -- code/bin/run-celery.sh
+pm2 start --name glitchtip-celery sh -- code/bin/run-celery-with-beat.sh
 ```
