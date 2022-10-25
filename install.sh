@@ -2,8 +2,8 @@
 
 path=$(pwd)
 
-ln -s "${path}/env.example" "${path}/code/.env"
-ln -s "${path}/env.example" "${path}/frontend/.env"
+cp "${path}/env.example" "${path}/code/.env"
+cp "${path}/env.example" "${path}/frontend/.env"
 cd code
 curl -sSL https://install.python-poetry.org | python3 -
 poetry install
