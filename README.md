@@ -16,9 +16,9 @@ sh install.sh
 ```
 
 ```
-pm2 start --name glitchtip --interpreter python3 code/manage.py -- runserver
+pm2 start --name glitchtip --interpreter python3 manage.py -- runserver
 ```
 
 ```
-pm2 start --name glitchtip-celery sh -- code/bin/run-celery-with-beat.sh
+pm2 start --name glitchtip-celery sh -- bin/run-celery-with-beat.sh
 ```

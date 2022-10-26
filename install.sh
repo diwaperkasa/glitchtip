@@ -18,4 +18,8 @@ cd code
 python3 manage.py collectstatic
 
 # start server
-python3 manage.py runserver
+# python3 manage.py runserver
+
+# restart pm2 service
+# pm2 restart glitctip
+# pm2 restart glitctip-celery
