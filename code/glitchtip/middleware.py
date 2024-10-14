@@ -77,8 +77,8 @@ def _should_check_dangling_login(request, response):
 
 def _check_dangling_login(request):
     if not getattr(request, "_account_login_accessed", False):
-        if flows.login.LOGIN_SESSION_KEY in request.session:
-            request.session.pop(flows.login.LOGIN_SESSION_KEY)
+        if flows.login.AUTHENTICATION_METHODS_SESSION_KEY in request.session:
+            request.session.pop(flows.login.AUTHENTICATION_METHODS_SESSION_KEY)
 
 
 async def _acheck_dangling_login(request):
