@@ -144,6 +144,11 @@ class IssueAPITestCase(GlitchTestCase):
         res = self.client.get(self.list_url + "?sort=-priority")
         self.assertEqual(res.json()[0]["id"], str(issue2.id))
 
+    def test_priority_environment(self):
+        baker.make("issue_events.Issue", project=self.project)
+        res = self.client.get(self.list_url + "?sort=-priority&environment=env")
+        self.assertEqual(res.status_code, 200)
+
     def test_search(self):
         issue = baker.make(
             "issue_events.Issue",
@@ -530,6 +535,18 @@ class IssueAPITestCase(GlitchTestCase):
         res = self.client.get(self.list_url)
         self.assertEqual(len(res.json()), 3)
 
+    def test_issue_update(self):
+        issue = baker.make("issue_events.Issue", project=self.project)
+        data = {"status": "resolved"}
+        res = self.client.put(
+            get_issue_url(issue.pk),
+            data,
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 200)
+        issue.refresh_from_db()
+        self.assertEqual(issue.status, EventStatus.RESOLVED)
+
     def test_issue_delete(self):
         issue = baker.make("issue_events.Issue", project=self.project)
         not_my_issue = baker.make("issue_events.Issue")
@@ -540,7 +557,7 @@ class IssueAPITestCase(GlitchTestCase):
         res = self.client.delete(get_issue_url(not_my_issue.id))
         self.assertEqual(res.status_code, 404)
 
-    def test_issue_update(self):
+    def test_organizations_issue_update(self):
         issue = baker.make("issue_events.Issue", project=self.project)
         self.assertEqual(issue.status, EventStatus.UNRESOLVED)
         data = {"status": "resolved"}
@@ -570,8 +587,20 @@ class IssueAPITestCase(GlitchTestCase):
         issues = baker.make("issue_events.Issue", project=self.project, _quantity=2)
         url = f"{self.list_url}?id={issues[0].id}&id={issues[1].id}"
         self.client.delete(url)
-        issues = Issue.objects.all().count()
+        issues = Issue.objects.count()
         self.assertEqual(issues, 0)
+
+    def test_issue_merge(self):
+        issues = baker.make("issue_events.Issue", project=self.project, _quantity=2)
+        url = f"{self.list_url}?id={issues[0].id}&id={issues[1].id}"
+        data = {"merge": 1}
+        res = self.client.put(
+            url,
+            data,
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(Issue.objects.filter(is_deleted=False).count(), 1)
 
     def test_bulk_delete_via_search(self):
         """Bulk delete Issues via search string"""

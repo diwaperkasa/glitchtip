@@ -1,8 +1,6 @@
 from django.conf import settings
 from django.contrib import admin
-from django.db.models import F, PositiveIntegerField
-from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Cast
+from django.db.models import F
 from django.utils.html import format_html
 from import_export.admin import ImportExportModelAdmin
 from organizations.base_admin import (
@@ -11,15 +9,22 @@ from organizations.base_admin import (
     BaseOwnerInline,
 )
 
-from .models import Organization, OrganizationOwner, OrganizationUser
+from apps.stripe.models import StripeSubscription
+from apps.stripe.utils import get_stripe_link
+
+from .models import (
+    Organization,
+    OrganizationOwner,
+    OrganizationSocialApp,
+    OrganizationUser,
+)
 from .resources import OrganizationResource, OrganizationUserResource
 
 ORGANIZATION_LIST_FILTER = (
     "is_active",
     "is_accepting_events",
+    "stripesubscription__price__product",
 )
-if settings.BILLING_ENABLED:
-    ORGANIZATION_LIST_FILTER += ("djstripe_customers__subscriptions__plan__product",)
 
 
 class OwnerInline(BaseOwnerInline):
@@ -32,24 +37,36 @@ class OrganizationUserInline(admin.StackedInline):
     extra = 0
 
 
+class OrganizationSubscriptionInline(admin.StackedInline):
+    model = StripeSubscription
+    extra = 0
+    readonly_fields = [field.name for field in StripeSubscription._meta.fields]
+
+
 class GlitchTipBaseOrganizationAdmin(BaseOrganizationAdmin):
-    readonly_fields = ("customers", "created")
+    readonly_fields = ("customer_link", "subscription_link", "created")
     list_filter = ORGANIZATION_LIST_FILTER
-    inlines = [OrganizationUserInline, OwnerInline]
+    inlines = [OrganizationUserInline, OwnerInline, OrganizationSubscriptionInline]
     show_full_result_count = False
 
     def issue_events(self, obj):
         return obj.issue_event_count
 
-    def customers(self, obj):
-        return format_html(
-            " ".join(
-                [
-                    f'<a href="{customer.get_stripe_dashboard_url()}" target="_blank">{customer.id}</a>'
-                    for customer in obj.djstripe_customers.all()
-                ]
+    def customer_link(self, obj):
+        if customer_id := obj.stripe_customer_id:
+            return format_html(
+                '<a href="{}" target="_blank">{}</a>',
+                get_stripe_link(customer_id),
+                customer_id,
             )
-        )
+
+    def subscription_link(self, obj):
+        if subscription_id := obj.stripe_primary_subscription_id:
+            return format_html(
+                '<a href="{}" target="_blank">{}</a>',
+                get_stripe_link(subscription_id),
+                subscription_id,
+            )
 
     def transaction_events(self, obj):
         return obj.transaction_count
@@ -74,6 +91,7 @@ class OrganizationAdmin(GlitchTipBaseOrganizationAdmin, ImportExportModelAdmin):
         "uptime_check_events",
         "file_size",
         "total_events",
+        "stripe_primary_subscription",
     ]
     resource_class = OrganizationResource
 
@@ -105,7 +123,9 @@ class IsOverListFilter(admin.SimpleListFilter):
 
     def queryset(self, request, queryset):
         if self.value() is not None:
-            queryset = queryset.filter(max_events__isnull=False)
+            queryset = queryset.filter(
+                stripe_primary_subscription__price__product__events__isnull=False
+            )
         if self.value() is False:
             return queryset.filter(total_event_count__lte=F("max_events"))
         if self.value() is True:
@@ -128,23 +148,14 @@ class OrganizationSubscriptionAdmin(GlitchTipBaseOrganizationAdmin):
     ]
 
     def max_events(self, obj):
-        return obj.max_events
+        return obj.stripe_primary_subscription.price.product.events
 
     def current_period_end(self, obj):
-        return obj.current_period_end
+        return obj.stripe_primary_subscription.current_period_end
 
     def get_queryset(self, request):
-        qs = Organization.objects.with_event_counts().annotate(
-            max_events=Cast(
-                KeyTextTransform(
-                    "events",
-                    "djstripe_customers__subscriptions__plan__product__metadata",
-                ),
-                output_field=PositiveIntegerField(),
-            ),
-            current_period_end=F(
-                "djstripe_customers__subscriptions__current_period_end"
-            ),
+        qs = Organization.objects.with_event_counts().select_related(
+            "stripe_primary_subscription__price__product"
         )
         # From super
         ordering = self.ordering or ()
@@ -163,7 +174,13 @@ class OrganizationUserAdmin(BaseOrganizationUserAdmin, ImportExportModelAdmin):
     resource_class = OrganizationUserResource
 
 
+class OrganizationSocialAppAdmin(admin.ModelAdmin):
+    list_display = ["organization", "social_app"]
+    search_fields = ("organization__name", "social_app__name")
+
+
 admin.site.register(Organization, OrganizationAdmin)
 if settings.BILLING_ENABLED:
     admin.site.register(OrganizationSubscription, OrganizationSubscriptionAdmin)
 admin.site.register(OrganizationUser, OrganizationUserAdmin)
+admin.site.register(OrganizationSocialApp, OrganizationSocialAppAdmin)

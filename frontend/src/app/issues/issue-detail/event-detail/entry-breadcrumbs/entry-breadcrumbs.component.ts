@@ -1,10 +1,17 @@
-import { KeyValue, NgClass, AsyncPipe, JsonPipe, DatePipe, KeyValuePipe } from "@angular/common";
+import {
+  KeyValue,
+  NgClass,
+  JsonPipe,
+  DatePipe,
+  KeyValuePipe,
+} from "@angular/common";
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
   Component,
   ElementRef,
   ViewChild,
+  inject,
 } from "@angular/core";
 import { Json } from "src/app/interface-primitives";
 import { IssueDetailService } from "../../issue-detail.service";
@@ -17,25 +24,23 @@ import { MatDividerModule } from "@angular/material/divider";
   templateUrl: "./entry-breadcrumbs.component.html",
   styleUrls: ["./entry-breadcrumbs.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
     MatDividerModule,
     NgClass,
     MatButtonModule,
     MatIconModule,
-    AsyncPipe,
     JsonPipe,
     DatePipe,
-    KeyValuePipe
-],
+    KeyValuePipe,
+  ],
 })
 export class EntryBreadcrumbsComponent implements AfterViewInit {
+  private issueDetailService = inject(IssueDetailService);
+
   @ViewChild("breadBox") breadBox?: ElementRef;
 
-  breadcrumbs$ = this.issueDetailService.breadcrumbs$;
-  showShowMore$ = this.issueDetailService.showShowMore$;
-
-  constructor(private issueDetailService: IssueDetailService) {}
+  breadcrumbs = this.issueDetailService.breadcrumbs;
+  showShowMore = this.issueDetailService.showShowMore;
 
   ngAfterViewInit() {
     if (this.breadBox?.nativeElement.offsetHeight >= 1250) {
@@ -49,7 +54,7 @@ export class EntryBreadcrumbsComponent implements AfterViewInit {
 
   keepOrder = (
     a: KeyValue<string, Json>,
-    b: KeyValue<string, Json>
+    b: KeyValue<string, Json>,
   ): number => {
     return 0;
   };

@@ -4,7 +4,7 @@ from django.shortcuts import aget_object_or_404
 from ninja import Router
 from ninja.pagination import paginate
 
-from apps.organizations_ext.models import OrganizationUserRole
+from apps.organizations_ext.constants import OrganizationUserRole
 from apps.projects.models import Project
 from glitchtip.api.authentication import AuthHttpRequest
 from glitchtip.api.permissions import has_permission
@@ -65,8 +65,8 @@ async def create_project_alert(
         organization__slug=organization_slug,
         slug=project_slug,
     )
-    data = payload.dict()
-    recipients = data.pop("alert_recipients")
+    data = payload.dict(exclude_unset=True)
+    recipients = data.pop("alert_recipients", [])
     project_alert = await project.projectalert_set.acreate(**data)
     await AlertRecipient.objects.abulk_create(
         [AlertRecipient(alert=project_alert, **recipient) for recipient in recipients]
@@ -95,8 +95,8 @@ async def update_project_alert(
         id=alert_id,
     )
 
-    data = payload.dict()
-    alert_recipients = data.pop("alert_recipients")
+    data = payload.dict(exclude_unset=True)
+    alert_recipients = data.pop("alert_recipients", [])
     for attr, value in data.items():
         setattr(alert, attr, value)
     await alert.asave()

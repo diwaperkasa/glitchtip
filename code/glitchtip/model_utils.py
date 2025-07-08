@@ -1,10 +1,9 @@
-from enum import Enum as StrEnum
+from enum import StrEnum
 from typing import Union
 
 from django.conf import settings
 from django.db import models
-
-from psqlextra.backend.migrations.operations.add_default_partition import (
+from psql_partition.backend.migrations.operations.add_default_partition import (
     PostgresAddDefaultPartition,
 )
 
@@ -20,14 +19,17 @@ class FromStringIntegerChoices(models.IntegerChoices):
 class TestDefaultPartition(PostgresAddDefaultPartition):
     """Create default partition only on test database"""
 
+    def is_testing_database(self) -> bool:
+        return settings.TESTING or settings.ENABLE_TEST_API
+
     def state_forwards(self, *args, **kwargs):
-        if settings.TESTING:
+        if self.is_testing_database():
             super().state_forwards(*args, **kwargs)
 
     def database_forwards(self, *args, **kwargs):
-        if settings.TESTING:
+        if self.is_testing_database():
             super().database_forwards(*args, **kwargs)
 
     def database_backwards(self, *args, **kwargs):
-        if settings.TESTING:
+        if self.is_testing_database():
             super().database_backwards(*args, **kwargs)

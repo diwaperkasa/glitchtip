@@ -1,6 +1,8 @@
+from allauth.socialaccount.models import SocialApp
 from django.conf import settings
+from django.core.validators import MaxValueValidator
 from django.db import models
-from django.db.models import F, OuterRef, Q
+from django.db.models import Count, F, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
@@ -13,199 +15,165 @@ from organizations.base import (
 )
 from organizations.managers import OrgManager
 from organizations.signals import owner_changed, user_added
-from sql_util.utils import SubqueryCount, SubquerySum
 
-from apps.observability.metrics import clear_metrics_cache
-
-from .fields import OrganizationSlugField
-
-# Defines which scopes belong to which role
-# Credit to sentry/conf/server.py
-ROLES = (
-    {
-        "id": "member",
-        "name": "Member",
-        "desc": "Members can view and act on events, as well as view most other data within the organization.",
-        "scopes": set(
-            [
-                "event:read",
-                "event:write",
-                "event:admin",
-                "project:releases",
-                "project:read",
-                "org:read",
-                "member:read",
-                "team:read",
-            ]
-        ),
-    },
-    {
-        "id": "admin",
-        "name": "Admin",
-        "desc": "Admin privileges on any teams of which they're a member. They can create new teams and projects, as well as remove teams and projects which they already hold membership on (or all teams, if open membership is on). Additionally, they can manage memberships of teams that they are members of.",
-        "scopes": set(
-            [
-                "event:read",
-                "event:write",
-                "event:admin",
-                "org:read",
-                "member:read",
-                "project:read",
-                "project:write",
-                "project:admin",
-                "project:releases",
-                "team:read",
-                "team:write",
-                "team:admin",
-                "org:integrations",
-            ]
-        ),
-    },
-    {
-        "id": "manager",
-        "name": "Manager",
-        "desc": "Gains admin access on all teams as well as the ability to add and remove members.",
-        "is_global": True,
-        "scopes": set(
-            [
-                "event:read",
-                "event:write",
-                "event:admin",
-                "member:read",
-                "member:write",
-                "member:admin",
-                "project:read",
-                "project:write",
-                "project:admin",
-                "project:releases",
-                "team:read",
-                "team:write",
-                "team:admin",
-                "org:read",
-                "org:write",
-                "org:integrations",
-            ]
-        ),
-    },
-    {
-        "id": "owner",
-        "name": "Organization Owner",
-        "desc": "Unrestricted access to the organization, its data, and its settings. Can add, modify, and delete projects and members, as well as make billing and plan changes.",
-        "is_global": True,
-        "scopes": set(
-            [
-                "org:read",
-                "org:write",
-                "org:admin",
-                "org:integrations",
-                "member:read",
-                "member:write",
-                "member:admin",
-                "team:read",
-                "team:write",
-                "team:admin",
-                "project:read",
-                "project:write",
-                "project:admin",
-                "project:releases",
-                "event:read",
-                "event:write",
-                "event:admin",
-            ]
-        ),
-    },
+from apps.difs.models import DebugInformationFile
+from apps.observability.utils import clear_metrics_cache
+from apps.projects.models import (
+    IssueEventProjectHourlyStatistic,
+    TransactionEventProjectHourlyStatistic,
 )
+from apps.sourcecode.models import DebugSymbolBundle
+from apps.uptime.models import MonitorCheck
 
-
-class OrganizationUserRole(models.IntegerChoices):
-    MEMBER = 0, "Member"
-    ADMIN = 1, "Admin"
-    MANAGER = 2, "Manager"
-    OWNER = 3, "Owner"  # Many users can be owner but only one primary owner
-
-    @classmethod
-    def from_string(cls, string: str):
-        for status in cls:
-            if status.label.lower() == string.lower():
-                return status
-
-    @classmethod
-    def get_role(cls, role: int):
-        return ROLES[role]
+from .constants import OrganizationUserRole
+from .fields import OrganizationSlugField
 
 
 class OrganizationManager(OrgManager):
     def with_event_counts(self, current_period=True):
+        queryset = self
         subscription_filter = Q()
         event_subscription_filter = Q()
         checks_subscription_filter = Q()
         if current_period and settings.BILLING_ENABLED:
             subscription_filter = Q(
                 created__gte=OuterRef(
-                    "djstripe_customers__subscriptions__current_period_start"
+                    "stripe_primary_subscription__current_period_start"
                 ),
-                created__lt=OuterRef(
-                    "djstripe_customers__subscriptions__current_period_end"
-                ),
+                created__lt=OuterRef("stripe_primary_subscription__current_period_end"),
             )
             event_subscription_filter = Q(
-                date__gte=OuterRef(
-                    "djstripe_customers__subscriptions__current_period_start"
-                ),
-                date__lt=OuterRef(
-                    "djstripe_customers__subscriptions__current_period_end"
-                ),
+                date__gte=OuterRef("stripe_primary_subscription__current_period_start"),
+                date__lt=OuterRef("stripe_primary_subscription__current_period_end"),
             )
             checks_subscription_filter = Q(
                 start_check__gte=OuterRef(
-                    "djstripe_customers__subscriptions__current_period_start"
+                    "stripe_primary_subscription__current_period_start"
                 ),
                 start_check__lt=OuterRef(
-                    "djstripe_customers__subscriptions__current_period_end"
+                    "stripe_primary_subscription__current_period_end"
                 ),
             )
 
-        queryset = self.annotate(
-            issue_event_count=Coalesce(
-                SubquerySum(
-                    "projects__issueeventprojecthourlystatistic__count",
-                    filter=event_subscription_filter,
-                ),
-                0,
-            ),
-            transaction_count=Coalesce(
-                SubquerySum(
-                    "projects__transactioneventprojecthourlystatistic__count",
-                    filter=event_subscription_filter,
-                ),
-                0,
-            ),
-            uptime_check_event_count=SubqueryCount(
-                "monitor__checks", filter=checks_subscription_filter
-            ),
-            file_size=(
-                Coalesce(
-                    SubquerySum(
-                        "release__releasefile__file__blob__size",
-                        filter=subscription_filter,
-                    ),
-                    0,
-                )
-                + Coalesce(
-                    SubquerySum(
-                        "projects__debuginformationfile__file__blob__size",
-                        filter=subscription_filter,
-                    ),
-                    0,
-                )
+        # Subquery for Issue Events Sum
+        issue_event_subquery = Subquery(
+            IssueEventProjectHourlyStatistic.objects.filter(
+                Q(project__organization=OuterRef("pk")),  # Link to outer Organization
+                event_subscription_filter,  # Apply date filtering
             )
-            / 1000000,
+            .values(
+                "project__organization"  # Group by organization (required for annotate)
+            )
+            .annotate(
+                sum_count=Sum("count")  # Calculate sum for this group
+            )
+            .values(
+                "sum_count"  # Select only the calculated sum
+            )
+            .order_by(),  # Prevent potential default ordering issues in subquery
+            output_field=models.BigIntegerField(),  # Define output type
+        )
+
+        # Subquery for Transaction Events Sum
+        transaction_subquery = Subquery(
+            TransactionEventProjectHourlyStatistic.objects.filter(
+                Q(project__organization=OuterRef("pk")), event_subscription_filter
+            )
+            .values("project__organization")
+            .annotate(sum_count=Sum("count"))
+            .values("sum_count")
+            .order_by(),
+            output_field=models.BigIntegerField(),
+        )
+
+        # Subquery for Uptime Checks Count
+        # Assumes MonitorCheck relates to Monitor which relates to Organization
+        uptime_check_subquery = Subquery(
+            MonitorCheck.objects.filter(
+                Q(monitor__organization=OuterRef("pk")),  # Link Monitor -> Organization
+                Q(checks_subscription_filter),  # Apply date filtering
+            )
+            .values(
+                "monitor__organization"  # Group by organization
+            )
+            .annotate(
+                check_count=Count("pk")  # Count checks for this group
+            )
+            .values(
+                "check_count"  # Select only the count
+            )
+            .order_by(),
+            output_field=models.IntegerField(),
+        )
+
+        # Subquery for Debug Symbol Bundle File Size Sum
+        # Assumes DebugSymbolBundle relates directly to Organization
+        debugsymbol_size_subquery = Subquery(
+            DebugSymbolBundle.objects.filter(
+                Q(organization=OuterRef("pk")),  # Direct link to Organization
+                Q(subscription_filter),  # Apply created date filtering
+            )
+            .values(
+                "organization"  # Group by organization
+            )
+            .annotate(
+                total_size=Sum("file__blob__size")  # Sum blob sizes
+            )
+            .values(
+                "total_size"  # Select the sum
+            )
+            .order_by(),
+            output_field=models.BigIntegerField(),
+        )
+
+        # Subquery for Debug Information File Size Sum
+        # Assumes DebugInformationFile relates to Project which relates to Organization
+        debuginfo_size_subquery = Subquery(
+            DebugInformationFile.objects.filter(
+                Q(project__organization=OuterRef("pk")),  # Link via Project
+                subscription_filter,  # Apply created date filtering
+            )
+            .values(
+                "project__organization"  # Group by organization
+            )
+            .annotate(
+                total_size=Sum("file__blob__size")  # Sum blob sizes
+            )
+            .values(
+                "total_size"  # Select the sum
+            )
+            .order_by(),
+            output_field=models.BigIntegerField(),
+        )
+        return queryset.annotate(
+            issue_event_count=Coalesce(issue_event_subquery, 0),
+            transaction_count=Coalesce(transaction_subquery, 0),
+            # Use Coalesce for count as well, safer if no checks exist
+            uptime_check_event_count=Coalesce(uptime_check_subquery, 0),
+            # Calculate total file size, Coalesce each part, sum, then convert/divide
+            # Use FloatField for output if division result can be non-integer
+            file_size=Coalesce(
+                models.ExpressionWrapper(
+                    (
+                        Coalesce(debugsymbol_size_subquery, 0)
+                        + Coalesce(debuginfo_size_subquery, 0)
+                    ),
+                    output_field=models.FloatField(),  # Cast sum before division
+                )
+                / 1000000.0,  # Divide by 1 million (ensure float division)
+                0.0,  # Coalesce the final division result
+                output_field=models.BigIntegerField(),
+            ),
+        ).annotate(
+            # Calculate total using F expressions referring to the fields just annotated
             total_event_count=F("issue_event_count")
             + F("transaction_count")
             + F("uptime_check_event_count")
+            # Note: Adding file_size (in MB) directly to event counts might be conceptually odd.
+            # Verify if this addition is intended business logic.
+            # If file_size should not be part of 'total_event_count', remove it here.
             + F("file_size"),
         )
-        return queryset.distinct("pk")
 
 
 class Organization(SharedBaseModel, OrganizationBase):
@@ -220,12 +188,25 @@ class Organization(SharedBaseModel, OrganizationBase):
     is_accepting_events = models.BooleanField(
         default=True, help_text="Used for throttling at org level"
     )
+    event_throttle_rate = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MaxValueValidator(100)],
+        help_text="Probability (in percent) on how many events are throttled. Used for throttling at project level",
+    )
     open_membership = models.BooleanField(
         default=True, help_text="Allow any organization member to join any team"
     )
     scrub_ip_addresses = models.BooleanField(
         default=True,
         help_text="Default for whether projects should script IP Addresses",
+    )
+    stripe_customer_id = models.CharField(max_length=28, blank=True)
+    stripe_primary_subscription = models.ForeignKey(
+        "stripe.StripeSubscription",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="+",
     )
 
     objects = OrganizationManager()
@@ -368,3 +349,14 @@ class OrganizationOwner(OrganizationOwnerBase):
 
 class OrganizationInvitation(OrganizationInvitationBase):
     """Required to exist for django-organizations"""
+
+
+class OrganizationSocialApp(models.Model):
+    """
+    Associate organization with social app, for authentication purposes.
+    Example: If Foo org has social app FooGoogle, then any user logging in via FooGoogle
+    OAuth must be automatically assigned to the Foo org.
+    """
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    social_app = models.OneToOneField(SocialApp, on_delete=models.CASCADE)

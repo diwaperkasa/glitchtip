@@ -1,16 +1,12 @@
-import { Injectable, computed } from "@angular/core";
-import { catchError, tap, throwError } from "rxjs";
-import { AccountService } from "src/app/api/allauth/account.service";
-import {
-  AllAuthError,
-  AllAuthHttpErrorResponse,
-} from "src/app/api/allauth/allauth.interfaces";
+import { Injectable, computed, inject } from "@angular/core";
+import { AllAuthError } from "src/app/api/allauth/allauth.interfaces";
 import { handleAllAuthErrorResponse } from "src/app/api/allauth/allauth.utils";
 import {
   messagesLookup,
   reduceParamErrors,
 } from "src/app/api/allauth/errorMessages";
 import { UserService } from "src/app/api/user/user.service";
+import { client } from "src/app/shared/api/api";
 import { APIState } from "src/app/shared/shared.interfaces";
 import { StatefulService } from "src/app/shared/stateful-service/signal-state.service";
 
@@ -29,6 +25,8 @@ const initialState: PasswordState = {
   providedIn: "root",
 })
 export class PasswordService extends StatefulService<PasswordState> {
+  private userService = inject(UserService);
+
   loading = computed(() => this.state().loading);
   errors = computed(() => this.state().errors);
   success = computed(() => this.state().success);
@@ -39,30 +37,31 @@ export class PasswordService extends StatefulService<PasswordState> {
     reduceParamErrors(this.state().errors.filter((err) => err.param)),
   );
 
-  constructor(
-    private accountService: AccountService,
-    private userService: UserService,
-  ) {
+  constructor() {
     super(initialState);
   }
 
-  changePassword(current_password: string, new_password: string) {
+  async changePassword(current_password: string, new_password: string) {
     this.state.set(initialState);
-    return this.accountService
-      .changePassword(current_password, new_password)
-      .pipe(
-        tap(() => {
-          this.state.set({ ...initialState, success: true });
-          this.userService.getUserDetails();
-        }),
-        catchError((err: AllAuthHttpErrorResponse) => {
-          this.state.set({
-            ...this.state(),
-            loading: false,
-            errors: handleAllAuthErrorResponse(err),
-          });
-          return throwError(() => new Error("Unable to change password"));
-        }),
-      );
+    const { error, response } = await client.POST(
+      "/_allauth/browser/v1/account/password/change",
+      {
+        body: {
+          current_password,
+          new_password,
+        },
+      },
+    );
+    if (error) {
+      this.state.set({
+        ...this.state(),
+        loading: false,
+        errors: handleAllAuthErrorResponse(error, response),
+      });
+      return false;
+    }
+    this.state.set({ ...initialState, success: true });
+    this.userService.getUserDetails();
+    return true;
   }
 }

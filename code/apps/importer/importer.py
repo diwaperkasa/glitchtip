@@ -1,10 +1,12 @@
 import aiohttp
 import tablib
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.db.models import Q
 from django.urls import reverse
 
-from apps.organizations_ext.models import OrganizationUser, OrganizationUserRole
+from apps.organizations_ext.constants import OrganizationUserRole
+from apps.organizations_ext.models import OrganizationUser
 from apps.organizations_ext.resources import (
     OrganizationResource,
     OrganizationUserResource,
@@ -62,7 +64,7 @@ class GlitchTipImporter:
         await self.import_teams()
 
     async def get(self, url: str):
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(**settings.AIOHTTP_CONFIG) as session:
             async with session.get(url, headers=self.headers) as res:
                 return await res.json()
 
@@ -186,7 +188,7 @@ class GlitchTipImporter:
         await sync_to_async(resource.import_data)(dataset, raise_errors=True)
 
     async def check_auth(self):
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(**settings.AIOHTTP_CONFIG) as session:
             async with session.get(self.url + "/api/0/", headers=self.headers) as res:
                 data = await res.json()
                 if res.status != 200 or not data["user"]:

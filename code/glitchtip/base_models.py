@@ -1,7 +1,6 @@
 from django.db import models
-
-from psqlextra.models import PostgresPartitionedModel
-from psqlextra.types import PostgresPartitioningMethod
+from psql_partition.models import PostgresPartitionedModel
+from psql_partition.types import PostgresPartitioningMethod
 
 
 class CreatedModel(models.Model):
@@ -36,7 +35,7 @@ class SoftDeleteModel(models.Model):
     def delete(self, *args, **kwargs):
         """Mark the record as deleted instead of deleting it"""
         self.is_deleted = True
-        self.save()
+        self.save(update_fields=["is_deleted"])
 
     def force_delete(self, *args, **kwargs):
         """Delete the record from the database"""

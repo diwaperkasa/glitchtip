@@ -1,30 +1,29 @@
-import { Component, OnInit, ViewChild } from "@angular/core";
+import { Component, OnInit, ViewChild, effect, inject } from "@angular/core";
 import {
   FormGroup,
-  UntypedFormArray,
   FormControl,
   Validators,
-  UntypedFormBuilder,
   ReactiveFormsModule,
+  FormArray,
+  FormBuilder,
 } from "@angular/forms";
 import { MatCheckbox, MatCheckboxModule } from "@angular/material/checkbox";
 import { AuthTokensService, AuthTokensState } from "../auth-tokens.service";
-import { StatefulBaseComponent } from "src/app/shared/stateful-service/stateful-base.component";
 import { LoadingButtonComponent } from "../../../shared/loading-button/loading-button.component";
 import { MatInputModule } from "@angular/material/input";
-import { AsyncPipe } from "@angular/common";
 import { MatFormFieldModule } from "@angular/material/form-field";
 import { MatDividerModule } from "@angular/material/divider";
 import { MatIconModule } from "@angular/material/icon";
 import { RouterLink } from "@angular/router";
 import { MatButtonModule } from "@angular/material/button";
 import { MatCardModule } from "@angular/material/card";
+import { StatefulComponent } from "src/app/shared/stateful-service/signal-state.component";
+import { mapFormErrors } from "src/app/shared/forms/form.utils";
 
 @Component({
   selector: "gt-new-token",
   templateUrl: "./new-token.component.html",
   styleUrls: ["./new-token.component.scss"],
-  standalone: true,
   imports: [
     MatCardModule,
     MatButtonModule,
@@ -36,19 +35,19 @@ import { MatCardModule } from "@angular/material/card";
     MatInputModule,
     MatCheckboxModule,
     LoadingButtonComponent,
-    AsyncPipe,
   ],
 })
 export class NewTokenComponent
-  extends StatefulBaseComponent<AuthTokensState, AuthTokensService>
+  extends StatefulComponent<AuthTokensState, AuthTokensService>
   implements OnInit
 {
+  protected service: AuthTokensService;
+  private fb = inject(FormBuilder);
+
   @ViewChild("selectAllCheckbox") selectAllCheckbox?: MatCheckbox;
 
-  createLoading$ = this.service.createLoading$;
-  createError$ = this.service.createError$;
-  createErrorLabel$ = this.service.createErrorLabel$;
-  createErrorScopes$ = this.service.createErrorScopes$;
+  createLoading = this.service.createLoading;
+  createErrorForm = this.service.createErrorForm;
 
   form: FormGroup;
   scopeOptions: string[] = [
@@ -71,25 +70,31 @@ export class NewTokenComponent
   ];
 
   get scopes() {
-    return this.form.controls.scopes as UntypedFormArray;
+    return this.form.controls.scopes as FormArray;
   }
 
   get label() {
     return this.form.controls.label as FormControl;
   }
 
-  constructor(
-    protected service: AuthTokensService,
-    private fb: UntypedFormBuilder,
-  ) {
+  constructor() {
+    const service = inject(AuthTokensService);
+
     super(service);
+    this.service = service;
+
     this.form = this.fb.group({
-      label: new FormControl("", [Validators.required]),
-      scopes: new UntypedFormArray([]),
+      label: new FormControl("", [
+        Validators.required,
+        Validators.maxLength(255),
+      ]),
+      scopes: new FormArray([]),
     });
 
     /* Set scopeOptions to scopes FormArray **/
     this.scopeOptions.forEach(() => this.scopes.push(new FormControl(false)));
+
+    effect(() => mapFormErrors(service.createErrorFields(), this.form));
   }
 
   ngOnInit(): void {
@@ -113,26 +118,6 @@ export class NewTokenComponent
     }
   }
 
-  getLabelFieldError() {
-    this.createErrorLabel$.subscribe((error) => {
-      if (error) {
-        return this.label.setErrors({
-          serverErrorLabel: error,
-        });
-      }
-    });
-  }
-
-  getScopesFieldError() {
-    this.createErrorScopes$.subscribe((error) => {
-      if (error) {
-        return this.scopes.setErrors({
-          serverErrorScopes: error,
-        });
-      }
-    });
-  }
-
   validateScopes() {
     /* Check to see if at least one scope is selected before submitting **/
     const valueSelected = this.scopes.value.find(
@@ -145,16 +130,8 @@ export class NewTokenComponent
     }
   }
 
-  validateForm() {
-    this.validateScopes();
-    this.getLabelFieldError();
-    this.getScopesFieldError();
-  }
-
   onSubmit() {
-    this.service.resetCreateErrors();
-
-    this.validateForm();
+    this.validateScopes();
 
     if (this.form.valid) {
       const label = this.label.value;

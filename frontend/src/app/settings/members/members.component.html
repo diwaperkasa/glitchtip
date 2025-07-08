@@ -6,13 +6,13 @@
   <mat-card>
     <mat-card-header>
       <mat-card-title>
-        {{ (activeOrganizationDetail$ | async)?.name }}
+        {{ activeOrganizationDetail()?.name }}
       </mat-card-title>
     </mat-card-header>
     <mat-divider></mat-divider>
     <mat-card-content>
       <div class="list">
-        @for (member of members$ | async; track member) {
+        @for (member of members(); track member) {
           <div class="list--item">
             <div class="email-and-badge">
               <a class="email" mat-line [routerLink]="[member.id]"
@@ -23,15 +23,12 @@
                   class="mat-caption"
                   color="primary"
                   highlighted="true"
-                  >
+                >
                   Account Owner
                 </mat-chip>
               }
               @if (member.pending) {
-                <mat-chip
-                  class="mat-caption"
-                  color="primary"
-                  >
+                <mat-chip class="mat-caption" color="primary">
                   Invite Pending
                 </mat-chip>
               }
@@ -44,11 +41,13 @@
                       class="resend-invite"
                       [loading]="member.loadingResendInvite"
                       [buttonText]="
-                        member.sentResendInvite ? 'Invite Resent' : 'Resend Invite'
+                        member.sentResendInvite
+                          ? 'Invite Resent'
+                          : 'Resend Invite'
                       "
                       [disabled]="member.sentResendInvite"
                       (buttonClick)="resendInvite(member)"
-                      >
+                    >
                     </gt-loading-button>
                   }
                 </div>

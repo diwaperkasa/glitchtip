@@ -1,8 +1,7 @@
 import { HttpErrorResponse } from "@angular/common/http";
-import {
-  CredentialCreationOptionsJSON,
-  CredentialRequestOptionsJSON,
-} from "@github/webauthn-json";
+import { components } from "../allauth-schema";
+
+type Flow = components["schemas"]["Flow"];
 
 interface AllAuthUser {
   id: number;
@@ -21,12 +20,6 @@ interface AuthenticationMethod {
 
 export interface AllAuthResponse {
   status: number;
-}
-
-interface Flow {
-  id: string;
-  providers?: string[];
-  is_pending?: true;
 }
 
 interface Provider {
@@ -66,21 +59,7 @@ export interface AllAuthProvidersResponse extends AllAuthLoginResponse {
   data: ProviderAccount[];
 }
 
-type FlowID =
-  | "verify_email"
-  | "login"
-  | "signup"
-  | "provider_redirect"
-  | "provider_signup"
-  | "provider_token"
-  | "mfa_authenticate"
-  | "reauthenticate"
-  | "mfa_reauthenticate";
-
-export interface AuthFlow {
-  id: FlowID;
-  providers?: Provider[];
-  is_pending?: boolean;
+export interface AuthFlow extends Flow {
   types?: string[];
 }
 
@@ -132,10 +111,6 @@ interface RecoveryCodesAuthenticator extends AuthenticatorBase {
   unused_code_count: number;
 }
 
-interface RecoveryCodesAuthenticatorCodes extends RecoveryCodesAuthenticator {
-  unused_codes: string[];
-}
-
 export interface WebAuthnAuthenticator extends AuthenticatorBase {
   type: "webauthn";
   id: number;
@@ -148,42 +123,10 @@ export type Authenticator =
   | RecoveryCodesAuthenticator
   | WebAuthnAuthenticator;
 
-export interface AuthenticatorsResponse extends AllAuthResponse {
-  data: Authenticator[];
-}
-
-export interface AuthenticatorTOTPStatusResponse extends AllAuthResponse {
-  data: TOTPAuthenticator;
-}
-
 export interface AuthenticatorTOTPStatusNotFound extends AllAuthResponse {
   status: 404;
   meta: {
     secret: string;
     totp_url: string;
-  };
-}
-
-export interface RegenerateRecoveryCodesResponse extends AllAuthResponse {
-  data: RecoveryCodesAuthenticatorCodes;
-}
-
-export interface GetWebauthnResponse extends AllAuthResponse {
-  data: {
-    creation_options: CredentialCreationOptionsJSON;
-  };
-}
-
-export interface WebAuthnAuthenticatorResponse extends AllAuthResponse {
-  status: 200;
-  data: WebAuthnAuthenticator;
-  meta: {
-    recovery_codes_generated: boolean;
-  };
-}
-
-export interface GetWebAuthnCredentialRequestResponse extends AllAuthResponse {
-  data: {
-    request_options: CredentialRequestOptionsJSON;
   };
 }

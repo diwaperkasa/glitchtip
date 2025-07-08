@@ -3,7 +3,7 @@
 rm -rf code
 rm -rf frontend
 
-glitchtip_version=v4.1.4
+glitchtip_version=v5.0.5
 
 git clone https://gitlab.com/glitchtip/glitchtip-backend.git code
 cd code

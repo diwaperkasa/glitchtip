@@ -1,37 +1,37 @@
 import {
-  enableProdMode,
   ErrorHandler,
-  importProvidersFrom,
+  inject,
+  provideZonelessChangeDetection,
+  Provider,
 } from "@angular/core";
 import { loadTranslations } from "@angular/localize";
 
-import { environment } from "./environments/environment";
 import { AppComponent } from "./app/app.component";
-import { MicroSentryModule } from "@micro-sentry/angular";
-import {
-  MAT_SNACK_BAR_DEFAULT_OPTIONS,
-  MatSnackBarModule,
-} from "@angular/material/snack-bar";
-import { provideAnimationsAsync } from "@angular/platform-browser/animations/async";
+import { provideMicroSentry } from "@micro-sentry/angular";
+import { MAT_SNACK_BAR_DEFAULT_OPTIONS } from "@angular/material/snack-bar";
 import { routes, TemplatePageTitleStrategy } from "./app/app.routes";
 import { bootstrapApplication } from "@angular/platform-browser";
 import { LessAnnoyingErrorStateMatcher } from "./app/shared/less-annoying-error-state-matcher";
 import { ErrorStateMatcher } from "@angular/material/core";
 import { CustomMicroSentryErrorHandler } from "./app/custom-microsentry-error-handler";
-import { tokenInterceptor } from "./app/api/auth/token.interceptor";
 import {
+  HttpHandlerFn,
+  HttpInterceptorFn,
+  HttpRequest,
   provideHttpClient,
   withInterceptors,
-  withXsrfConfiguration,
 } from "@angular/common/http";
 import {
   provideRouter,
   TitleStrategy,
+  withComponentInputBinding,
   withInMemoryScrolling,
   withPreloading,
   withRouterConfig,
 } from "@angular/router";
 import { CustomPreloadingStrategy } from "./app/preloadingStrategy";
+import { APP_BASE_HREF } from "@angular/common";
+import { provideAnimationsAsync } from "@angular/platform-browser/animations/async";
 
 let snackBarDuration = 4000;
 if (window.Cypress) {
@@ -39,10 +39,6 @@ if (window.Cypress) {
   snackBarDuration = 100;
 }
 const serverErrorsRegex = new RegExp(`403 Forbidden|404 OK`, "mi");
-
-if (environment.production) {
-  enableProdMode();
-}
 
 // First locale is default, add additional after it
 const availableLocales = ["en", "fr", "nb"];
@@ -58,11 +54,37 @@ if (locale in localeMappings) {
   locale = localeMappings[locale];
 }
 
+export function baseHrefInterceptor(
+  req: HttpRequest<unknown>,
+  next: HttpHandlerFn,
+) {
+  const baseHref = inject(APP_BASE_HREF);
+  const apiReq = req.clone({ url: `${baseHref.replace(/\/$/, "")}${req.url}` });
+  return next(apiReq);
+}
+
+const extraInterceptors: HttpInterceptorFn[] = [];
+const extraProviders: Provider[] = [];
+
+const baseElement = document.querySelector("base");
+if (baseElement) {
+  const baseHref = baseElement.href;
+  // Only add base href support when it's not "/"
+  if (baseHref !== "/") {
+    extraProviders.push({ provide: APP_BASE_HREF, useValue: baseHref });
+    extraInterceptors.push(baseHrefInterceptor);
+  }
+}
+
 const bootstrap = () =>
   bootstrapApplication(AppComponent, {
     providers: [
+      ...extraProviders,
+      provideZonelessChangeDetection(),
+      provideAnimationsAsync(), // ngx-charts uses this, should be removed
       provideRouter(
         routes,
+        withComponentInputBinding(),
         withPreloading(CustomPreloadingStrategy),
         withInMemoryScrolling({
           scrollPositionRestoration: "enabled",
@@ -70,12 +92,12 @@ const bootstrap = () =>
         withRouterConfig({
           onSameUrlNavigation: "reload",
           paramsInheritanceStrategy: "always",
-        })
+        }),
       ),
-      importProvidersFrom(
-        MatSnackBarModule,
-        MicroSentryModule.forRoot({ ignoreErrors: [serverErrorsRegex] })
-      ),
+      provideHttpClient(withInterceptors([...extraInterceptors])),
+      provideMicroSentry({
+        ignoreErrors: [serverErrorsRegex],
+      }),
       {
         provide: MAT_SNACK_BAR_DEFAULT_OPTIONS,
         useValue: { duration: snackBarDuration },
@@ -86,14 +108,6 @@ const bootstrap = () =>
         provide: ErrorStateMatcher,
         useClass: LessAnnoyingErrorStateMatcher,
       },
-      provideAnimationsAsync(),
-      provideHttpClient(
-        withXsrfConfiguration({
-          cookieName: "csrftoken",
-          headerName: "X-CSRFTOKEN",
-        }),
-        withInterceptors([tokenInterceptor])
-      ),
     ],
   }).catch((err) => console.error(err));
 

@@ -1,7 +1,7 @@
 <mat-card>
   <mat-card-content>
     <div class="form-center">
-      @for (error of formError?.non_field_errors; track error) {
+      @for (error of formError()?.non_field_errors; track error) {
         <mat-error>{{ error }}</mat-error>
       }
     </div>
@@ -136,7 +136,7 @@
         <mat-form-field appearance="outline" data-cy="associated-project">
           <mat-label i18n>Associated Project</mat-label>
           <mat-select formControlName="project">
-            @if (orgProjects$ | async; as orgProjects) {
+            @if (orgProjects(); as orgProjects) {
               <mat-option value="">None</mat-option>
               @for (orgProject of orgProjects; track orgProject) {
                 <mat-option [value]="orgProject.id">
@@ -193,7 +193,7 @@
               matInput
               autocomplete="off"
               formControlName="expectedBody"
-              placeholder="Status code"
+              placeholder="Expected body"
               data-cy="expected-body"
             />
           </mat-form-field>
@@ -227,8 +227,8 @@
             <mat-error i18n>Enter an integer.</mat-error>
           }
         </mat-form-field>
-        @if (totalEventsAllowed$ | async; as totalEventsAllowed) {
-          @if (intervalPerMonth$ | async; as intervalPerMonth) {
+        @if (totalEventsAllowed(); as totalEventsAllowed) {
+          @if (intervalPerMonth(); as intervalPerMonth) {
             <div class="help-text mat-caption">
               @if (intervalPerMonth <= totalEventsAllowed) {
                 This will use approximately
@@ -279,8 +279,8 @@
       }
       <gt-loading-button
         class="submit"
-        [loading]="loading === true"
-        [buttonText]="monitorSettings ? 'Update Monitor' : 'Create Monitor'"
+        [loading]="loading() === true"
+        [buttonText]="monitorSettings() ? 'Update Monitor' : 'Create Monitor'"
         data-cy="monitor-submit"
       >
       </gt-loading-button>

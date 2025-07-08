@@ -8,22 +8,23 @@ import {
   OnInit,
   ChangeDetectorRef,
   OnDestroy,
+  inject,
 } from "@angular/core";
 import { debounceTime, fromEvent, Subscription } from "rxjs";
 import { ResponseTimeSeries } from "../uptime.interfaces";
-import { CommonModule } from "@angular/common";
 import { NgxChartsModule } from "@swimlane/ngx-charts";
 
 @Component({
-  standalone: true,
   selector: "gt-monitor-response-chart",
   templateUrl: "./monitor-response-chart.component.html",
   styleUrls: ["./monitor-response-chart.component.scss"],
-  imports: [CommonModule, NgxChartsModule],
+  imports: [NgxChartsModule],
 })
 export class MonitorResponseChartComponent
   implements AfterViewInit, OnInit, OnDestroy
 {
+  private changeDetector = inject(ChangeDetectorRef);
+
   @Input() data?: ResponseTimeSeries[] | null;
   @Input() scale?: {
     yScaleMin: number;
@@ -46,10 +47,6 @@ export class MonitorResponseChartComponent
     { name: "Up", value: "#54a65a" },
     { name: "Down", value: "#e22a46" },
   ];
-
-  //Workaround to resize chart after main-nav closes or opens
-  //Change detector is needed to force Angular to recognize the change being made in the subscription
-  constructor(private changeDetector: ChangeDetectorRef) {}
   ngOnInit(): void {
     this.delayedResize$ = fromEvent(window, "resize")
       .pipe(debounceTime(400))

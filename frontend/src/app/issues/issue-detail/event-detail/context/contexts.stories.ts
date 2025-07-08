@@ -1,5 +1,4 @@
-import { of } from "rxjs";
-
+import { signal } from "@angular/core";
 import { ContextsComponent } from "./contexts.component";
 import { generateIconPath, iconDictionary } from "src/app/shared/shared.utils";
 
@@ -39,7 +38,7 @@ export const Contexts = () => {
       subtitle: "20.0.4",
       key: "Version",
       type: "os",
-      icon: "static/assets/images/os-logos/ubuntu.png",
+      icon: "static/assets/images/os-logos/UBT.png",
       matIcon: null,
     },
     {
@@ -62,7 +61,7 @@ export const Contexts = () => {
 
   return {
     props: {
-      specialContexts$: of(fullContext),
+      specialContexts: signal(fullContext),
     },
   };
 };
@@ -116,7 +115,7 @@ export const UnknownContexts = () => {
   ];
   return {
     props: {
-      specialContexts$: of(transformedContexts),
+      specialContexts: signal(transformedContexts),
     },
   };
 };
@@ -136,7 +135,7 @@ export const IconPaths = () => {
         src="${generateIconPath(icon)}"
       />
     </div>
-  `
+  `,
   );
 
   return {

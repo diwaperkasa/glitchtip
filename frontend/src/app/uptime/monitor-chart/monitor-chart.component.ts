@@ -1,25 +1,25 @@
-import { Component, Input } from "@angular/core";
-import { MonitorCheck } from "../uptime.interfaces";
+import { Component, input } from "@angular/core";
 import { DownReason } from "../uptime.interfaces";
 import { reasonTextConversions } from "../uptime.utils";
 import { MatTooltipModule } from "@angular/material/tooltip";
-import { CommonModule } from "@angular/common";
+import { components } from "src/app/api/api-schema";
+import { DatePipe } from "@angular/common";
+type MonitorCheck = components["schemas"]["MonitorCheckSchema"];
 
 @Component({
-  standalone: true,
   selector: "gt-monitor-chart",
   templateUrl: "./monitor-chart.component.html",
   styleUrls: ["./monitor-chart.component.scss"],
-  imports: [CommonModule, MatTooltipModule],
+  imports: [DatePipe, MatTooltipModule],
 })
 export class MonitorChartComponent {
-  @Input() data: MonitorCheck[] = [];
+  readonly data = input<MonitorCheck[]>([]);
 
   constructor() {}
 
   get emptyChecks() {
-    if (this.data.length < 60) {
-      return new Array(60 - this.data.length);
+    if (this.data().length < 60) {
+      return new Array(60 - this.data().length);
     } else {
       return [];
     }

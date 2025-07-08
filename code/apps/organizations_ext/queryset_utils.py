@@ -6,9 +6,15 @@ from apps.teams.models import Team
 from .models import Organization, OrganizationUser
 
 
-def get_organizations_queryset(user_id, role_required=False, add_details=False):
+def get_organizations_queryset(
+    user_id, role_required=False, add_details=False, organization_slug=None
+):
     qs = Organization.objects.filter(users=user_id)
-    if role_required:
+
+    if organization_slug:
+        qs = qs.filter(slug=organization_slug)
+
+    if role_required or add_details:
         qs = qs.annotate(
             actor_role=Subquery(
                 qs.filter(organization_users__user=user_id).values(
@@ -50,7 +56,7 @@ def get_organization_users_queryset(
         OrganizationUser.objects.filter(
             organization__users=user_id, organization__slug=organization_slug
         )
-        .select_related("user")
+        .select_related("user", "organization__owner")
         .prefetch_related("user__socialaccount_set")
     )
     if team_slug:
@@ -64,5 +70,5 @@ def get_organization_users_queryset(
             )
         )
     if add_details:
-        qs = qs.select_related("organization__owner").prefetch_related("teams")
+        qs = qs.prefetch_related("teams")
     return qs

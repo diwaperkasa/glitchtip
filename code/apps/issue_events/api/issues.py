@@ -1,14 +1,16 @@
 import re
 import shlex
 from datetime import datetime, timedelta
-from enum import Enum as StrEnum
-from typing import Any, Literal, Optional
+from enum import StrEnum
+from typing import Any, Literal
 from uuid import UUID
 
-from django.db.models import Count, Sum
-from django.db.models.expressions import RawSQL
+from django.db.models import Count, F, FloatField, Sum, Value
+from django.db.models.expressions import ExpressionWrapper
+from django.db.models.functions import Extract, Log
 from django.db.models.query import QuerySet
 from django.http import Http404, HttpResponse
+from django.shortcuts import aget_object_or_404
 from django.utils import timezone
 from ninja import Field, Query, Schema
 from ninja.pagination import paginate
@@ -21,7 +23,7 @@ from glitchtip.api.permissions import has_permission
 from glitchtip.utils import async_call_celery_task
 
 from ..constants import EventStatus, LogLevel
-from ..models import Issue
+from ..models import Issue, IssueEvent, IssueHash
 from ..schema import IssueDetailSchema, IssueSchema, IssueTagSchema
 from ..tasks import delete_issue_task
 from . import router
@@ -29,26 +31,33 @@ from . import router
 
 async def get_queryset(
     request: AuthHttpRequest,
-    organization_slug: Optional[str] = None,
-    project_slug: Optional[str] = None,
+    organization_slug: str | None = None,
+    project_slug: str | None = None,
 ):
     user_id = request.auth.user_id
-    qs = Issue.objects.all()
+    qs = Issue.objects
 
     if organization_slug:
-        organization = await Organization.objects.filter(
-            users=user_id, slug=organization_slug
-        ).afirst()
+        organization = await aget_object_or_404(
+            Organization, users=user_id, slug=organization_slug
+        )
         qs = qs.filter(project__organization_id=organization.id)
     else:
         qs = qs.filter(project__organization__users=user_id)
 
     if project_slug:
         qs = qs.filter(project__slug=project_slug)
-    qs = qs.annotate(
+    return qs.annotate(
         num_comments=Count("comments", distinct=True),
-    )
-    return qs.select_related("project")
+    ).select_related("project")
+
+
+EventStatusEnum = StrEnum("EventStatusEnum", EventStatus.labels)
+
+
+class UpdateIssueSchema(Schema):
+    status: EventStatusEnum | None = None
+    merge: int | None = None
 
 
 @router.get(
@@ -68,6 +77,20 @@ async def get_issue(request: AuthHttpRequest, issue_id: int):
         raise Http404()
 
 
+@router.put(
+    "/issues/{int:issue_id}/",
+    response=IssueDetailSchema,
+)
+@has_permission(["event:write", "event:admin"])
+async def update_issue(
+    request: AuthHttpRequest,
+    issue_id: int,
+    payload: UpdateIssueSchema,
+):
+    qs = await get_queryset(request)
+    return await update_issue_status(qs, issue_id, payload)
+
+
 @router.delete("/issues/{int:issue_id}/", response={204: None})
 @has_permission(["event:write", "event:admin"])
 async def delete_issue(request: AuthHttpRequest, issue_id: int):
@@ -77,13 +100,6 @@ async def delete_issue(request: AuthHttpRequest, issue_id: int):
         raise Http404()
     await async_call_celery_task(delete_issue_task, [issue_id])
     return 204, None
-
-
-EventStatusEnum = StrEnum("EventStatusEnum", EventStatus.labels)
-
-
-class UpdateIssueSchema(Schema):
-    status: EventStatusEnum
 
 
 @router.put(
@@ -98,6 +114,13 @@ async def update_organization_issue(
     payload: UpdateIssueSchema,
 ):
     qs = await get_queryset(request, organization_slug=organization_slug)
+    return await update_issue_status(qs, issue_id, payload)
+
+
+async def update_issue_status(qs: QuerySet, issue_id: int, payload: UpdateIssueSchema):
+    """
+    BC Gitlab integration
+    """
     qs = qs.annotate(
         user_report_count=Count("userreport", distinct=True),
     )
@@ -148,8 +171,8 @@ class IssueFilters(Schema):
     first_seen__gte: RelativeDateTime = Field(None, alias="start")
     first_seen__lte: RelativeDateTime = Field(None, alias="end")
     project__in: list[str] = Field(None, alias="project")
-    environment: Optional[list[str]] = None
-    query: Optional[str] = None
+    environment: list[str] | None = None
+    query: str | None = None
 
 
 sort_options = Literal[
@@ -167,8 +190,8 @@ sort_options = Literal[
 def filter_issue_list(
     qs: QuerySet,
     filters: Query[IssueFilters],
-    sort: Optional[sort_options] = None,
-    event_id: Optional[UUID] = None,
+    sort: sort_options | None = None,
+    event_id: UUID | None = None,
 ):
     qs_filters = filters.dict(exclude_none=True)
     query = qs_filters.pop("query", None)
@@ -211,11 +234,12 @@ def filter_issue_list(
 
     if sort:
         if sort.endswith("priority"):
-            # Raw SQL must be added when sorting by priority
             # Inspired by https://stackoverflow.com/a/43788975/443457
             qs = qs.annotate(
-                priority=RawSQL(
-                    "LOG10(count) + EXTRACT(EPOCH FROM last_seen)/300000", ()
+                priority=ExpressionWrapper(
+                    Log(10, F("count"))
+                    + Extract(F("last_seen"), "epoch") / Value(300000.0),
+                    output_field=FloatField(),
                 )
             )
         qs = qs.order_by(sort)
@@ -236,8 +260,10 @@ async def list_issues(
     filters: Query[IssueFilters],
     sort: sort_options = "-last_seen",
 ):
-    qs = await get_queryset(request, organization_slug=organization_slug)
-    event_id: Optional[UUID] = None
+    qs = (await get_queryset(request, organization_slug=organization_slug)).filter(
+        is_deleted=False
+    )
+    event_id: UUID | None = None
     if filters.query:
         try:
             event_id = UUID(filters.query)
@@ -280,7 +306,22 @@ async def update_issues(
 ):
     qs = await get_queryset(request, organization_slug=organization_slug)
     qs = filter_issue_list(qs, filters)
-    await qs.aupdate(status=EventStatus.from_string(payload.status))
+    if payload.status:
+        await qs.aupdate(status=EventStatus.from_string(payload.status))
+    if payload.merge:
+        issue = await qs.order_by("-id").afirst()
+        if not issue:
+            return payload
+        remove_qs = qs.exclude(id=issue.id)
+        await remove_qs.aupdate(is_deleted=True)
+        await IssueHash.objects.filter(issue__in=remove_qs).aupdate(issue=issue)
+        # Switch only the first 1000 events
+        event_ids = []
+        async for event_id in IssueEvent.objects.filter(
+            issue__in=remove_qs
+        ).values_list("id", flat=True)[:1000]:
+            event_ids.append(event_id)
+        await IssueEvent.objects.filter(id__in=event_ids).aupdate(issue=issue)
     return payload
 
 
@@ -302,7 +343,7 @@ async def list_project_issues(
     qs = await get_queryset(
         request, organization_slug=organization_slug, project_slug=project_slug
     )
-    event_id: Optional[UUID] = None
+    event_id: UUID | None = None
     if filters.query:
         try:
             event_id = UUID(filters.query)
@@ -318,7 +359,7 @@ async def list_project_issues(
 )
 @has_permission(["event:read", "event:write", "event:admin"])
 async def list_issue_tags(
-    request: AuthHttpRequest, issue_id: int, key: Optional[str] = None
+    request: AuthHttpRequest, issue_id: int, key: str | None = None
 ):
     qs = await get_queryset(request)
     try:

@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   Input,
   HostBinding,
+  input,
 } from "@angular/core";
 import type {
   ProjectCardButtonWithQuery,
@@ -13,14 +14,13 @@ import { MatIconModule } from "@angular/material/icon";
 import { RouterModule } from "@angular/router";
 import { MatTooltipModule } from "@angular/material/tooltip";
 import { MatButtonModule } from "@angular/material/button";
-import { CommonModule } from "@angular/common";
 import { MatDividerModule } from "@angular/material/divider";
+import { UpperCasePipe } from "@angular/common";
 
 @Component({
-  standalone: true,
   selector: "gt-project-card",
   imports: [
-    CommonModule,
+    UpperCasePipe,
     MatCardModule,
     MatIconModule,
     RouterModule,
@@ -33,18 +33,25 @@ import { MatDividerModule } from "@angular/material/divider";
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ProjectCardComponent {
-  @Input() cardLink?: string | unknown[];
-  @Input() cardLinkQueryParams?: { [k: string]: unknown };
-  @Input() title?: string;
-  @Input() descriptionList?: { key: string; value: string }[];
-  @Input() isMember?: boolean;
+  readonly cardLink = input<string | unknown[]>();
+  readonly cardLinkQueryParams = input<{
+    [k: string]: unknown;
+  }>();
+  readonly title = input<string>();
+  readonly descriptionList = input<
+    {
+      key: string;
+      value: string;
+    }[]
+  >();
+  readonly isMember = input<boolean>();
 
   @Input() primaryButton?: ProjectCardButtonWithQuery;
   @Input() secondaryButton?: ProjectCardButton;
 
-  @Input() sampleCard = false;
+  readonly sampleCard = input(false);
 
   @HostBinding("class.sample-card") get isSampleCard() {
-    return this.sampleCard;
+    return this.sampleCard();
   }
 }

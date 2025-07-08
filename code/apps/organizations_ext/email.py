@@ -1,15 +1,23 @@
+from typing import TYPE_CHECKING
+
 from django.conf import settings
 
 from glitchtip.email import DetailEmail
 
 from .models import Organization, OrganizationUser
 
+if TYPE_CHECKING:
+    from apps.stripe.models import StripeProduct
 
-class MetQuotaEmail(DetailEmail):
-    html_template_name = "organizations/met-quota-drip.html"
-    text_template_name = "organizations/met-quota-drip.txt"
-    subject_template_name = "organizations/met-quota-drip-subject.txt"
+
+class ThrottleNoticeEmail(DetailEmail):
+    html_template_name = "organizations/throttle-notice-drip.html"
+    text_template_name = "organizations/throttle-notice-drip.txt"
+    subject_template_name = "organizations/throttle-notice-drip-subject.txt"
     model = Organization
+
+    def get_object(self, *args, **kwargs):
+        return super().get_object(queryset=Organization.objects.with_event_counts())
 
     def get_email(self):
         return self.object.email
@@ -17,12 +25,25 @@ class MetQuotaEmail(DetailEmail):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         base_url = settings.GLITCHTIP_URL.geturl()
-        event_limit = settings.BILLING_FREE_TIER_EVENTS
+        faq_link = (
+            settings.MARKETING_URL
+            + "/documentation/frequently-asked-questions"
+            + "#how-can-i-reduce-the-number-of-events-my-organization-is-using-each-month"
+        )
         organization = self.object
         subscription_link = f"{base_url}/{organization.slug}/settings/subscription"
-        context["organization_name"] = organization.name
-        context["event_limit"] = event_limit
-        context["subscription_link"] = subscription_link
+        product: StripeProduct | None = None
+        if organization.stripe_primary_subscription:
+            product = organization.stripe_primary_subscription.price.product
+        context.update(
+            {
+                "organization": organization,
+                "product": product,
+                "event_limit": product.events if product else None,
+                "subscription_link": subscription_link,
+                "faq_link": faq_link,
+            }
+        )
         return context
 
 

@@ -1,10 +1,13 @@
-import { Component, ChangeDetectionStrategy, OnInit } from "@angular/core";
+import {
+  Component,
+  ChangeDetectionStrategy,
+  OnInit,
+  inject,
+} from "@angular/core";
 import { RouterLink } from "@angular/router";
 import { MatCheckboxModule } from "@angular/material/checkbox";
 import { MatButtonModule } from "@angular/material/button";
 import { MatProgressBarModule } from "@angular/material/progress-bar";
-import { lastValueFrom } from "rxjs";
-import { FormErrorComponent } from "../../shared/forms/form-error/form-error.component";
 import { LoginService } from "../login.service";
 
 @Component({
@@ -12,32 +15,30 @@ import { LoginService } from "../login.service";
   templateUrl: "./login-webauthn.component.html",
   styleUrls: ["./login-webauthn.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
     MatProgressBarModule,
-    FormErrorComponent,
     MatButtonModule,
     MatCheckboxModule,
     RouterLink,
   ],
 })
 export class LoginWebAuthnComponent implements OnInit {
+  private loginService = inject(LoginService);
+
   useTOTP = false; //this.loginService.useTOTP;
   // error$ = this.loginService.error$;
-  authInProg = false; //this.loginService.authInProg;
-
-  constructor(private loginService: LoginService) {}
+  authInProg = false;
 
   switchMethod() {
     this.loginService.switchMethod();
   }
 
   ngOnInit() {
-    lastValueFrom(this.loginService.webAuthnAuthenticate());
+    this.loginService.webAuthnAuthenticate();
   }
 
   retryAuth() {
-    lastValueFrom(this.loginService.webAuthnAuthenticate());
+    this.loginService.webAuthnAuthenticate();
   }
 
   restartLogin() {

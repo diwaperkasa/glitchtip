@@ -2,7 +2,7 @@
   <header class="page-header">
     <h1 class="mat-headline-4">General Settings</h1>
   </header>
-  @if (activeOrganizationDetail$ | async; as activeOrg) {
+  @if (activeOrganizationDetail(); as activeOrg) {
     <mat-card>
       <mat-card-header>
         <mat-card-title>General</mat-card-title>
@@ -13,19 +13,20 @@
           <mat-form-field appearance="outline">
             <mat-label>Name</mat-label>
             <input matInput formControlName="name" [value]="activeOrg.name" />
-            @if (updateError) {
-              <mat-error>{{ updateError }}</mat-error>
-            }
           </mat-form-field>
           <gt-loading-button
             [disabled]="name?.value === activeOrg.name"
+            [loading]="loading().updateOrganization"
             mat-flat-button
             color="primary"
             buttonText="Update Name"
             id="update-org"
-            >
+          >
           </gt-loading-button>
         </form>
+        @if (errors().updateOrganization) {
+          <mat-error>{{ errors().updateOrganization }}</mat-error>
+        }
       </mat-card-content>
     </mat-card>
     <mat-card>
@@ -39,17 +40,17 @@
             By deleting this organization, you will lose all data including
             projects and their associated events.
           </p>
-          @if (deleteError) {
-            <mat-error>{{ deleteError }}</mat-error>
+          @if (errors().deleteOrganization) {
+            <mat-error>{{ errors().deleteOrganization }}</mat-error>
           }
         </div>
         <gt-loading-button
           data-test
           buttonText="Delete Organization"
-          [loading]="deleteLoading"
+          [loading]="loading().deleteOrganization"
           (click)="removeOrganization(activeOrg.slug, activeOrg.name)"
           id="delete-org"
-          >
+        >
         </gt-loading-button>
       </mat-card-content>
     </mat-card>

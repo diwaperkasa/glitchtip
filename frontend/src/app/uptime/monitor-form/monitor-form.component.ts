@@ -1,5 +1,11 @@
-import { Component, EventEmitter, Input, OnInit, Output } from "@angular/core";
-import { CommonModule } from "@angular/common";
+import {
+  Component,
+  OnInit,
+  input,
+  output,
+  inject,
+  signal,
+} from "@angular/core";
 import { LoadingButtonComponent } from "src/app/shared/loading-button/loading-button.component";
 import {
   FormGroup,
@@ -9,6 +15,7 @@ import {
   AbstractControl,
   ValidationErrors,
 } from "@angular/forms";
+import { DecimalPipe, NgTemplateOutlet } from "@angular/common";
 import { RouterModule } from "@angular/router";
 import { MatCardModule } from "@angular/material/card";
 import { MatDialog, MatDialogModule } from "@angular/material/dialog";
@@ -18,21 +25,23 @@ import { MatOptionModule } from "@angular/material/core";
 import { MatSelectModule } from "@angular/material/select";
 import { MatIconModule } from "@angular/material/icon";
 import { MatButtonModule } from "@angular/material/button";
-import { map, Observable, of, startWith } from "rxjs";
-import { MonitorDetail, MonitorInput, MonitorType } from "../uptime.interfaces";
+import { MonitorInput, MonitorType } from "../uptime.interfaces";
 import { intRegex, urlRegex } from "src/app/shared/validators";
-import { OrganizationsService } from "src/app/api/organizations/organizations.service";
-import { SubscriptionsService } from "src/app/api/subscriptions/subscriptions.service";
+import { SubscriptionService } from "src/app/api/subscriptions/subscription.service";
 import { EventInfoComponent } from "src/app/shared/event-info/event-info.component";
 import { MonitorService } from "../monitor.service";
 import { ServerError } from "src/app/shared/django.interfaces";
+import { OrganizationsService } from "src/app/api/organizations.service";
+import { components } from "src/app/api/api-schema";
+
+type MonitorDetail = components["schemas"]["MonitorDetailSchema"];
 
 const defaultExpectedStatus = 200;
 const defaultInterval = 60;
 
 // returns a pattern error to simplify error checking in template
 export function portUrlValidator(
-  control: AbstractControl<string>
+  control: AbstractControl<string>,
 ): ValidationErrors | null {
   if (control.value.startsWith("https:")) {
     return { pattern: true };
@@ -53,15 +62,14 @@ const portUrlValidators = [
 ];
 
 @Component({
-  standalone: true,
   selector: "gt-monitor-form",
   templateUrl: "./monitor-form.component.html",
   styleUrls: ["./monitor-form.component.scss"],
   imports: [
-    CommonModule,
+    DecimalPipe,
+    NgTemplateOutlet,
     ReactiveFormsModule,
     RouterModule,
-    EventInfoComponent,
     LoadingButtonComponent,
     MatButtonModule,
     MatCardModule,
@@ -74,16 +82,21 @@ const portUrlValidators = [
   ],
 })
 export class MonitorFormComponent implements OnInit {
-  @Input() monitorSettings?: MonitorDetail;
-  @Input({ required: true }) formError!: ServerError | null;
-  @Input({ required: true }) loading!: boolean | null;
+  private organizationsService = inject(OrganizationsService);
+  private subscriptionService = inject(SubscriptionService);
+  private monitorService = inject(MonitorService);
+  dialog = inject(MatDialog);
 
-  @Output() formSubmitted = new EventEmitter<MonitorInput>();
+  readonly monitorSettings = input<MonitorDetail>();
+  readonly formError = input.required<ServerError | null>();
+  readonly loading = input.required<boolean | null>();
 
-  orgProjects$ = this.organizationsService.activeOrganizationProjects$;
-  totalEventsAllowed$ = this.subscriptionsService.totalEventsAllowed$;
+  readonly formSubmitted = output<MonitorInput>();
 
-  intervalPerMonth$: Observable<number | null> = of(null);
+  orgProjects = this.organizationsService.activeOrganizationProjects;
+  totalEventsAllowed = this.subscriptionService.totalEventsAllowed;
+
+  intervalPerMonth = signal<number | null>(null);
 
   typeChoices: MonitorType[] = ["Ping", "GET", "POST", "Heartbeat", "TCP Port"];
 
@@ -121,7 +134,7 @@ export class MonitorFormComponent implements OnInit {
     Validators.pattern(intRegex),
   ]);
 
-  formProject = new FormControl<number | null>(null);
+  formProject = new FormControl<string | null>(null);
 
   monitorForm = new FormGroup({
     monitorType: this.formMonitorType,
@@ -134,36 +147,29 @@ export class MonitorFormComponent implements OnInit {
     project: this.formProject,
   });
 
-  constructor(
-    private organizationsService: OrganizationsService,
-    private subscriptionsService: SubscriptionsService,
-    private monitorService: MonitorService,
-    public dialog: MatDialog
-  ) {}
-
   ngOnInit() {
     this.monitorService.callSubscriptionDetails();
-    this.intervalPerMonth$ =
-      this.monitorForm.controls.interval.valueChanges.pipe(
-        startWith(this.monitorSettings?.interval ?? defaultInterval),
-        map((interval) => Math.floor(2592000 / interval))
-      );
+    const initialInterval = this.monitorSettings()?.interval ?? defaultInterval;
+    this.intervalPerMonth.set(Math.floor(2592000 / initialInterval));
 
-    if (this.monitorSettings) {
-      this.formName.patchValue(this.monitorSettings.name);
-      this.formMonitorType.patchValue(this.monitorSettings.monitorType);
-      this.formUrl.patchValue(
-        this.monitorSettings.url ? this.monitorSettings.url : ""
-      );
+    this.formInterval.valueChanges.subscribe((interval) => {
+      this.intervalPerMonth.set(Math.floor(2592000 / interval));
+    });
+
+    const monitorSettings = this.monitorSettings();
+    if (monitorSettings) {
+      this.formName.patchValue(monitorSettings.name);
+      this.formMonitorType.patchValue(monitorSettings.monitorType);
+      this.formUrl.patchValue(monitorSettings.url ? monitorSettings.url : "");
       this.formExpectedStatus.patchValue(
-        this.monitorSettings.expectedStatus
-          ? this.monitorSettings.expectedStatus
-          : defaultExpectedStatus
+        monitorSettings.expectedStatus
+          ? monitorSettings.expectedStatus
+          : defaultExpectedStatus,
       );
-      this.formExpectedBody.patchValue(this.monitorSettings.expectedBody);
-      this.formInterval.patchValue(this.monitorSettings.interval);
-      this.formTimeout.patchValue(this.monitorSettings.timeout);
-      this.formProject.patchValue(this.monitorSettings.project);
+      this.formExpectedBody.patchValue(monitorSettings.expectedBody!);
+      this.formInterval.patchValue(monitorSettings.interval);
+      this.formTimeout.patchValue(monitorSettings.timeout!);
+      this.formProject.patchValue(monitorSettings.projectID);
     }
 
     this.updateRequiredFields();

@@ -1,10 +1,13 @@
 variables:
   PROJECT_NAME: glitchtip
   PIP_DISABLE_PIP_VERSION_CHECK: "on"
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  POETRY_VIRTUALENVS_CREATE: "false"
-  POETRY_HOME: "/opt/poetry"
   POSTGRES_HOST_AUTH_METHOD: "trust"
+  UV_VERSION: 0.5
+  BASE_LAYER: bookworm
+  UV_SYSTEM_PYTHON: "true"
+  UV_PYTHON_DOWNLOADS: "never"
+  UV_PROJECT_ENVIRONMENT: "/usr/local"
+  UV_CACHE_DIR: ".uv-cache"
   DEBUG: "true"
 
 include:
@@ -17,7 +20,7 @@ workflow:
     - when: always
 
 test:
-  image: python:$VERSION
+  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
   variables:
     SECRET_KEY: testing
     ENABLE_TEST_API: "true"
@@ -25,38 +28,42 @@ test:
   services:
     - postgres:$POSTGRES_VERSION
   cache:
-    key: ${CI_COMMIT_REF_SLUG}${VERSION}
+    - key: ${CI_COMMIT_REF_SLUG}${VERSION}
+      files:
+        - uv.lock
+      paths:
+        - $UV_CACHE_DIR
+  cache:
     paths:
       - .cache/pip
   script:
-    - curl -sSL https://install.python-poetry.org | python3 -
-    - $POETRY_HOME/bin/poetry install --no-interaction --no-ansi
-    - ./manage.py test
+    - uv sync --frozen --no-install-project
+    - uv run ./manage.py test
+    - uv cache prune --ci
   rules:
     - if: $CI_PIPELINE_SOURCE != "schedule"
   parallel:
     matrix:
-      - VERSION: '3.11'
-        POSTGRES_VERSION: '13'
-      - VERSION: '3.12'
-        POSTGRES_VERSION: '16'
+      - PYTHON_VERSION: '3.11'
+        POSTGRES_VERSION: '14'
+      - PYTHON_VERSION: '3.13'
+        POSTGRES_VERSION: '17'
 
 lint:
-  image: python:3.12
+  image: python:3.13-slim
   script:
-    - curl -sSL https://install.python-poetry.org | python3 -
-    - $POETRY_HOME/bin/poetry install --no-interaction --no-ansi
+    - pip install ruff
     - ruff check glitchtip/ apps/
   rules:
     - if: $CI_PIPELINE_SOURCE != "schedule"
 
 build:
-  image: docker:27
+  image: docker:28
   rules:
     # Run only on protected branches that are not tagged and not merge requests
     - if: '$CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_TAG =~ "/^$/"'
   services:
-    - docker:27-dind
+    - docker:28-dind
   script:
     - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN registry.gitlab.com
     - docker build -t ${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_NAME//\//-} --build-arg IS_CI="True" .
@@ -73,7 +80,7 @@ buildx:
       - buildx
     expire_in: 1 hour
   services:
-    - docker:27-dind
+    - docker:28-dind
   script:
     - export DOCKER_BUILDKIT=1
     - git clone https://github.com/docker/buildx.git ./docker-buildx
@@ -84,11 +91,11 @@ buildx:
     - if: $CI_COMMIT_TAG =~ /^v\d+.\d+.\d+/
 
 build_arm_x86:
-  image: docker:27
+  image: docker:28
   needs:
     - buildx
   services:
-    - docker:27-dind
+    - docker:28-dind
   before_script:
     - mkdir -p ~/.docker/cli-plugins
     - mv buildx ~/.docker/cli-plugins/docker-buildx
@@ -97,8 +104,8 @@ build_arm_x86:
     - wget https://gitlab.com/api/v4/projects/15449363/jobs/artifacts/$CI_COMMIT_TAG/download?job=build-assets -O assets.zip
     - unzip assets.zip
     - rm assets.zip
-    - mv dist/glitchtip-frontend/* dist/
-    - rmdir dist/glitchtip-frontend/
+    - mv dist/glitchtip-frontend/browser/* dist/
+    - rmdir dist/glitchtip-frontend/browser/
     - VERSION=${CI_COMMIT_REF_NAME#*v}
     - MINOR_VERSION=$(echo "$CI_COMMIT_REF_NAME" | sed 's/\.[^.]*$//')
     - echo "Build version $VERSION ci registry image $CI_REGISTRY_IMAGE commit ref $CI_COMMIT_REF_NAME"
@@ -112,7 +119,7 @@ build_arm_x86:
 
 
 update_deps:
-  image: renovate/renovate:38
+  image: renovate/renovate:41
   variables:
     RENOVATE_PLATFORM: gitlab
     RENOVATE_ENDPOINT: https://gitlab.com/api/v4

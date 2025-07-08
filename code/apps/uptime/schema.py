@@ -6,7 +6,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import URLValidator
 from django.urls import reverse
-from ninja import Field, ModelSchema
+from ninja import ModelSchema
 from ninja.errors import ValidationError
 from pydantic import model_validator
 
@@ -33,6 +33,7 @@ class MonitorIn(CamelSchema, ModelSchema):
     expected_body: str
     expected_status: int | None
     timeout: Annotated[int, Ge(1), Le(60)] | None
+    project: str | None = None
 
     @model_validator(mode="after")
     def validate(self):
@@ -73,23 +74,24 @@ class MonitorIn(CamelSchema, ModelSchema):
             "monitor_type",
             "name",
             "url",
-            "project",
             "interval",
         ]
 
 
-class MonitorSchema(MonitorIn, ModelSchema):
-    project: int | None = Field(validation_alias="project_id")
-    environment: int | None = Field(validation_alias="environment_id")
-    is_up: bool | None = Field(validation_alias="latest_is_up")
+class MonitorSchema(CamelSchema, ModelSchema):
+    project_id: str | None
+    environment_id: int | None
+    is_up: bool | None
     last_change: str | None
     heartbeat_endpoint: str | None
     project_name: str | None = None
     env_name: str | None = None
     checks: list[MonitorCheckSchema]
-    organization: int = Field(validation_alias="organization_id")
+    organization_id: int
+    monitor_type: MonitorType
 
-    class Meta(MonitorIn.Meta):
+    class Meta:
+        model = Monitor
         fields = [
             "id",
             "monitor_type",
@@ -102,6 +104,13 @@ class MonitorSchema(MonitorIn, ModelSchema):
             "interval",
             "timeout",
         ]
+
+    class Config(CamelSchema.Config):
+        coerce_numbers_to_str = True
+
+    @staticmethod
+    def resolve_is_up(obj):
+        return obj.latest_is_up
 
     @staticmethod
     def resolve_last_change(obj):

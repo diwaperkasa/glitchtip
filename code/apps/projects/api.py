@@ -6,7 +6,8 @@ from ninja import Router
 from ninja.errors import ValidationError
 from ninja.pagination import paginate
 
-from apps.organizations_ext.models import Organization, OrganizationUserRole
+from apps.organizations_ext.constants import OrganizationUserRole
+from apps.organizations_ext.models import Organization
 from apps.shared.types import MeID
 from apps.teams.models import Team
 from apps.teams.schema import ProjectTeamSchema
@@ -118,7 +119,7 @@ async def update_project(
         ),
         slug=project_slug,
     )
-    for attr, value in payload.dict().items():
+    for attr, value in payload.dict(exclude_unset=True).items():
         setattr(project, attr, value)
     await project.asave()
     return project
@@ -188,7 +189,7 @@ async def create_project(
         users=user_id,
         organization_users__role__gte=OrganizationUserRole.ADMIN,
     )
-    project = await Project.objects.acreate(organization=organization, **payload.dict())
+    project = await Project.objects.acreate(organization=organization, **payload.dict(exclude_unset=True))
     await project.teams.aadd(team)
     project = await get_projects_queryset(user_id).aget(id=project.id)
     return 201, project

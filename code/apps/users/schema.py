@@ -41,7 +41,17 @@ class SocialAccountSchema(CamelSchema, ModelSchema):
             return data.get("username")
 
 
+class UserOptions(CamelSchema):
+    timezone: str | None = None
+    stacktrace_order: int | None = None
+    language: str | None = None
+    clock24_hours: bool | None = None
+    preferred_theme: str | None = None
+
+
 class UserIn(CamelSchema, ModelSchema):
+    options: UserOptions
+
     class Meta:
         model = User
         fields = [
@@ -52,11 +62,12 @@ class UserIn(CamelSchema, ModelSchema):
 
 class UserSchema(CamelSchema, ModelSchema):
     id: str
+    options: UserOptions
     username: EmailStr = Field(validation_alias="email")
-    created: datetime = Field(serialization_alias="dateJoined")
+    created: datetime = Field(alias="dateJoined")
     email: EmailStr
-    has_password_auth: bool = Field(validation_alias="has_usable_password")
-    identities: list[SocialAccountSchema] = Field(validation_alias="socialaccount_set")
+    has_usable_password: bool = Field(alias="hasPasswordAuth")
+    socialaccount_set: list[SocialAccountSchema] = Field(alias="identities")
 
     class Meta(UserIn.Meta):
         fields = [
@@ -88,7 +99,6 @@ class UserDetailSchema(UserSchema):
             return hash.hexdigest()
 
 
-
 class EmailAddressIn(CamelSchema, ModelSchema):
     email: EmailStr
 
@@ -98,11 +108,19 @@ class EmailAddressIn(CamelSchema, ModelSchema):
 
 
 class EmailAddressSchema(CamelSchema, ModelSchema):
-    isPrimary: bool = Field(validation_alias="primary")
-    isVerified: bool = Field(validation_alias="verified")
+    is_primary: bool
+    is_verified: bool
 
     class Meta(EmailAddressIn.Meta):
         pass
+
+    @staticmethod
+    def resolve_is_primary(obj):
+        return obj.primary
+
+    @staticmethod
+    def resolve_is_verified(obj):
+        return obj.verified
 
 
 class UserNotificationsSchema(CamelSchema, ModelSchema):

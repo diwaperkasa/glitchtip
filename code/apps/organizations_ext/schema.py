@@ -22,6 +22,7 @@ class OrganizationInSchema(CamelSchema, ModelSchema):
 
 
 class OrganizationSchema(OrganizationInSchema, ModelSchema):
+    id: str
     date_created: datetime = Field(validation_alias="created")
     status: dict[str, str] = {"id": "active", "name": "active"}
     avatar: dict[str, str | None] = {"avatarType": "", "avatarUuid": None}
@@ -30,11 +31,15 @@ class OrganizationSchema(OrganizationInSchema, ModelSchema):
 
     class Meta(OrganizationInSchema.Meta):
         fields = [
-            "id",
             "name",
             "slug",
             "is_accepting_events",
+            "event_throttle_rate",
         ]
+
+    @staticmethod
+    def resolve_id(obj):
+        return str(obj.id)
 
 
 OrgRole = Literal["member", "admin", "manager", "owner"]
@@ -59,12 +64,13 @@ class OrganizationUserIn(OrganizationUserUpdateSchema):
 
 class OrganizationUserSchema(CamelSchema, ModelSchema):
     id: str
-    role: str = Field(validation_alias="get_role")
-    role_name: str = Field(validation_alias="get_role_display")
-    date_created: datetime = Field(validation_alias="created")
-    email: str = Field(validation_alias="get_email")
+    role: OrgRole
+    role_name: str
+    created: datetime = Field(alias="dateCreated")
+    email: str
     user: UserSchema | None = None
     pending: bool
+    is_owner: bool
 
     class Meta:
         model = OrganizationUser
@@ -73,20 +79,31 @@ class OrganizationUserSchema(CamelSchema, ModelSchema):
     class Config(CamelSchema.Config):
         coerce_numbers_to_str = True
 
+    @staticmethod
+    def resolve_email(obj):
+        return obj.get_email()
+
+    @staticmethod
+    def resolve_role(obj):
+        return obj.get_role()
+
+    @staticmethod
+    def resolve_role_name(obj):
+        return obj.get_role_display()
+
+    @staticmethod
+    def resolve_is_owner(obj):
+        if owner := obj.organization.owner:
+            return owner.organization_user_id == obj.id
+        return False
+
 
 class OrganizationUserDetailSchema(OrganizationUserSchema):
     teams: list[str]
-    isOwner: bool
 
     @staticmethod
     def resolve_teams(obj):
         return [team.slug for team in obj.teams.all()]
-
-    @staticmethod
-    def resolve_isOwner(obj):
-        if owner := obj.organization.owner:
-            return owner.organization_user_id == obj.id
-        return False
 
 
 class AcceptInviteIn(CamelSchema):

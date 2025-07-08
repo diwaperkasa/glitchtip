@@ -1,16 +1,8 @@
-import {
-  ActivatedRouteSnapshot,
-  RouterStateSnapshot,
-  Routes,
-  TitleStrategy,
-  createUrlTreeFromSnapshot,
-} from "@angular/router";
-import { Injectable, inject } from "@angular/core";
-import { map } from "rxjs";
+import { RouterStateSnapshot, Routes, TitleStrategy } from "@angular/router";
+import { Injectable } from "@angular/core";
 import { LoggedInComponent } from "./logged-in.component";
-import { alreadyLoggedInGuard } from "./guards/already-logged-in.guard";
-import { OrganizationsService } from "./api/organizations/organizations.service";
-import { AuthService } from "./auth.service";
+import { alreadyLoggedInGuard, loggedInGuard } from "./guards";
+import { OrganizationFrameComponent } from "./organization/organization.component";
 
 export const routes: Routes = [
   {
@@ -53,21 +45,7 @@ export const routes: Routes = [
   {
     path: "",
     component: LoggedInComponent,
-    canActivate: [
-      (next: ActivatedRouteSnapshot, state: RouterStateSnapshot) =>
-        inject(AuthService).loggedInGuard$.pipe(
-          map((isLoggedIn) => {
-            if (isLoggedIn) {
-              return true;
-            }
-            return createUrlTreeFromSnapshot(
-              next,
-              ["/", "login"],
-              state.url !== "/" ? { next: state.url } : {},
-            );
-          }),
-        ),
-    ],
+    canActivate: [loggedInGuard],
     children: [
       {
         path: "",
@@ -100,10 +78,7 @@ export const routes: Routes = [
       },
       {
         path: ":org-slug",
-        canActivate: [
-          (next: ActivatedRouteSnapshot) =>
-            inject(OrganizationsService).watchRoute(next),
-        ],
+        component: OrganizationFrameComponent,
         children: [
           {
             path: "issues",

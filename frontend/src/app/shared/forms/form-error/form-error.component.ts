@@ -1,14 +1,8 @@
-import {
-  Component,
-  ChangeDetectionStrategy,
-  input,
-  Input,
-} from "@angular/core";
+import { Component, ChangeDetectionStrategy, input } from "@angular/core";
 
 import { MatInputModule } from "@angular/material/input";
 
 @Component({
-  standalone: true,
   selector: "gt-form-error",
   imports: [MatInputModule],
   templateUrl: "./form-error.component.html",
@@ -16,5 +10,5 @@ import { MatInputModule } from "@angular/material/input";
 })
 export class FormErrorComponent {
   errors = input<string[]>();
-  @Input() error: any; // Do not use
+  readonly error = input<any>(); // Do not use
 }

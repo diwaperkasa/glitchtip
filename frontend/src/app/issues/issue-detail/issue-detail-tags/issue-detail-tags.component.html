@@ -1,8 +1,8 @@
-@if ((tags$ | async)?.length) {
+@if (tags()?.length) {
   <mat-card>
     <mat-card-content>
       <h3 class="mat-body-strong">Tags</h3>
-      @for (tag of tags$ | async; track tag) {
+      @for (tag of tags(); track tag.key) {
         <p class="top-value mat-caption">
           <span class="key">{{ tag.key }}</span>
           <span>
@@ -11,30 +11,30 @@
         </p>
         <div>
           <div class="bars">
-            @for (topValue of tag.topValues; track topValue) {
+            @for (topValue of tag.topValues; track topValue.name) {
               <span
                 class="bar"
-            [ngStyle]="{
-              'width.%': topValue.percentRounded
-            }"
-            matTooltip="
+                [ngStyle]="{
+                  'width.%': topValue.percentRounded,
+                }"
+                matTooltip="
             {{ topValue.value }} - {{ topValue.percentRounded }}%
           "
                 matTooltipPosition="left"
-                ></span
-                >
-                }<span
-                class="bar"
-            [ngStyle]="{
-              'width.%': tag.other
-            }"
-            matTooltip="
+              ></span>
+            }
+            <span
+              class="bar"
+              [ngStyle]="{
+                'width.%': tag.other,
+              }"
+              matTooltip="
           Other - {{ tag.other }}%
         "
-                matTooltipPosition="left"
-              ></span> </div></div
-              >
-            }
-          </mat-card-content>
-        </mat-card>
+              matTooltipPosition="left"
+            ></span> </div
+        ></div>
       }
+    </mat-card-content>
+  </mat-card>
+}

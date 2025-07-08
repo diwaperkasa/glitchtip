@@ -12,12 +12,13 @@ import logging
 import os
 import sys
 import warnings
+from datetime import timedelta
 
 import environ
 import sentry_sdk
-import django
 from celery.schedules import crontab
 from corsheaders.defaults import default_headers
+from csp.constants import NONCE, SELF, UNSAFE_INLINE
 from django.conf import global_settings
 from django.core.exceptions import ImproperlyConfigured
 from django.http import UnreadablePostError
@@ -25,7 +26,7 @@ from sentry_sdk.integrations.django import DjangoIntegration
 
 env = environ.FileAwareEnv(
     ALLOWED_HOSTS=(list, ["*"]),
-    DEFAULT_FILE_STORAGE=(str, django.core.files.storage.FileSystemStorage),
+    DEFAULT_FILE_STORAGE=(str, global_settings.STORAGES["default"]["BACKEND"]),
     AWS_ACCESS_KEY_ID=(str, None),
     AWS_SECRET_ACCESS_KEY=(str, None),
     AWS_STORAGE_BUCKET_NAME=(str, None),
@@ -62,6 +63,7 @@ DEBUG = env("DEBUG")
 ENABLE_TEST_API = env.bool("ENABLE_TEST_API", False)
 if DEBUG is False:
     ENABLE_TEST_API = False
+if DEBUG and ENABLE_TEST_API:
     ACCOUNT_RATE_LIMITS = False  # Disable for e2e tests
 
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
@@ -73,6 +75,10 @@ if POD_IP:
 
 ENVIRONMENT = env.str("ENVIRONMENT", None)
 GLITCHTIP_VERSION = env.str("GLITCHTIP_VERSION", "0.0.0-unknown")
+# Multiline, markdown accepted. Example: "[Burke Software's](https://burkesoftware.com) GlitchTip Server"
+GLITCHTIP_INSTANCE_NAME: str | None = None
+if "GLITCHTIP_INSTANCE_NAME" in os.environ:
+    GLITCHTIP_INSTANCE_NAME = env.str("GLITCHTIP_INSTANCE_NAME", None, multiline=True)
 
 # Used in email and DSN generation. Set to full domain such as https://glitchtip.example.com
 default_url = env.str(
@@ -104,10 +110,13 @@ GLITCHTIP_MAX_UPTIME_CHECK_LIFE_DAYS = env.int(
 GLITCHTIP_MAX_TRANSACTION_EVENT_LIFE_DAYS = env.int(
     "GLITCHTIP_MAX_TRANSACTION_EVENT_LIFE_DAYS", default=GLITCHTIP_MAX_EVENT_LIFE_DAYS
 )
-# Defaults to twice as long as event life
 GLITCHTIP_MAX_FILE_LIFE_DAYS = env.int(
-    "GLITCHTIP_MAX_EVENT_LIFE_DAYS", default=GLITCHTIP_MAX_EVENT_LIFE_DAYS * 2
+    "GLITCHTIP_MAX_EVENT_LIFE_DAYS", default=GLITCHTIP_MAX_EVENT_LIFE_DAYS
 )
+
+# Check if a throttle is needed 1 out of every 5000 event requests
+GLITCHTIP_THROTTLE_CHECK_INTERVAL = env.int("GLITCHTIP_THROTTLE_CHECK_INTERVAL", 5000)
+SEARCH_MAX_LEXEMES = 4000  # Postgres search vectors will truncate after
 
 # Freezes acceptance of new events, for use during db maintenance
 MAINTENANCE_EVENT_FREEZE = env.bool("MAINTENANCE_EVENT_FREEZE", False)
@@ -115,9 +124,11 @@ MAINTENANCE_EVENT_FREEZE = env.bool("MAINTENANCE_EVENT_FREEZE", False)
 # For development purposes only, prints out inbound event store json
 EVENT_STORE_DEBUG = env.bool("EVENT_STORE_DEBUG", False)
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/dev/howto/static-files/
-STATIC_URL = "/static/"
+
+STATIC_URL = "static/"
+# Base HREF, such as example.com/glitchtip/ where BASE_PATH would be "/glitchtip"
+if "BASE_PATH" in os.environ or "FORCE_SCRIPT_NAME" in os.environ:
+    FORCE_SCRIPT_NAME = env.str("BASE_PATH", env.str("FORCE_SCRIPT_NAME", ""))
 
 
 # GlitchTip can track GlitchTip's own errors.
@@ -138,6 +149,8 @@ def before_send(event, hint):
 SENTRY_DSN = env.str("SENTRY_DSN", None)
 # Optionally allow a different DSN for the frontend
 SENTRY_FRONTEND_DSN = env.str("SENTRY_FRONTEND_DSN", SENTRY_DSN)
+# Set sample_rate to 1.0 to capture 100%.
+SENTRY_SAMPLE_RATE = env.float("SENTRY_SAMPLE_RATE", 1.0)
 # Set traces_sample_rate to 1.0 to capture 100%. Recommended to keep this value low.
 SENTRY_TRACES_SAMPLE_RATE = env.float("SENTRY_TRACES_SAMPLE_RATE", 0.01)
 
@@ -163,6 +176,7 @@ if SENTRY_DSN:
         environment=ENVIRONMENT,
         auto_session_tracking=False,
         send_client_reports=False,
+        sample_rate=SENTRY_SAMPLE_RATE,
         traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
         traces_sampler=traces_sampler,
     )
@@ -185,6 +199,14 @@ DEBUG_TOOLBAR_PANELS = [
     # "debug_toolbar.panels.profiling.ProfilingPanel",
 ]
 
+
+# Should GlitchTip trust and use proxy settings from environment variables (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
+PROXY_ENV = env.bool("PROXY_ENV", False)
+AIOHTTP_CONFIG = {
+    "headers": {"User-Agent": "GlitchTip/" + GLITCHTIP_VERSION},
+    "trust_env": PROXY_ENV,
+}
+
 # Application definition
 # Conditionally load to workaround unnecessary memory usage in celery/beat
 WEB_INSTALLED_APPS = [
@@ -198,11 +220,11 @@ WEB_INSTALLED_APPS = [
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
-    "psqlextra",
+    "django.contrib.humanize",
+    "psql_partition",
     "django_prometheus",
     "allauth",
-    "apps.account.apps.AccountConfig",
-    # "allauth.account",
+    "allauth.account",
     "allauth.headless",
     "allauth.mfa",
     "allauth.socialaccount",
@@ -216,21 +238,18 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.openid_connect",
     "allauth.socialaccount.providers.okta",
     "anymail",
-    "django_rest_mfa",
     "corsheaders",
+    "csp",
     "django_extensions",
 ]
 if DEBUG_TOOLBAR:
     INSTALLED_APPS.append("debug_toolbar")
 INSTALLED_APPS += [
-    "import_export",
     "storages",
     "glitchtip",
     "apps.alerts",
     "apps.environments",
     "apps.organizations_ext",
-    "events",
-    "issues",
     "apps.users",
     "apps.importer",
     "apps.uptime",
@@ -238,11 +257,14 @@ INSTALLED_APPS += [
     "apps.projects",
     "apps.teams",
     "apps.releases",
+    "apps.stripe",
+    "apps.sourcecode",
     "apps.difs",
     "apps.api_tokens",
     "apps.files",
     "apps.issue_events",
     "apps.event_ingest",
+    "import_export",  # Contains import management command, keep under apps.importer
 ]
 
 
@@ -279,10 +301,9 @@ MIDDLEWARE += [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "sentry.middleware.proxy.DecompressBodyMiddleware",
+    "glitchtip.middleware.DecompressBodyMiddleware",
     "django.middleware.locale.LocaleMiddleware",
-    "glitchtip.middleware.AccountMiddleware",
-    # "allauth.account.middleware.AccountMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
 ]
 
 if ENABLE_OBSERVABILITY_API:
@@ -318,7 +339,17 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 ]
 
 BILLING_ENABLED = False
-if env.str("STRIPE_TEST_PUBLIC_KEY", None) or env.str("STRIPE_LIVE_PUBLIC_KEY", None):
+STRIPE_PUBLIC_KEY = env.str("STRIPE_PUBLIC_KEY", None)
+STRIPE_SECRET_KEY = env.str("STRIPE_SECRET_KEY", None)
+STRIPE_WEBHOOK_SECRET = env.str("STRIPE_WEBHOOK_SECRET", None)
+STRIPE_WEBHOOK_SECRET_SUBSCRIPTION = env.str(
+    "STRIPE_WEBHOOK_SECRET_SUBSCRIPTION", STRIPE_WEBHOOK_SECRET
+)
+STRIPE_REGION = env.str("STRIPE_REGION", "")  # Sets stripe customer metadata
+STRIPE_REGION_DOMAINS = env.dict(
+    "STRIPE_REGION_DOMAINS", default={}
+)  # Forward webhooks to appropriate domain
+if STRIPE_PUBLIC_KEY and STRIPE_SECRET_KEY:
     BILLING_ENABLED = True
 
 # Set to chatwoot website token to enable live help widget. Assumes app.chatwoot.com.
@@ -327,45 +358,52 @@ CHATWOOT_IDENTITY_TOKEN = env.str("CHATWOOT_IDENTITY_TOKEN", None)
 
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", str, [])
 SECURE_BROWSER_XSS_FILTER = True
-CSP_DEFAULT_SRC = env.list("CSP_DEFAULT_SRC", str, ["'self'"])
-CSP_STYLE_SRC = env.list(
-    "CSP_STYLE_SRC", str, ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
-)
-CSP_STYLE_SRC_ELEM = env.list(
-    "CSP_STYLE_SRC_ELEM",
-    str,
-    ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-)
-CSP_FONT_SRC = env.list(
-    "CSP_FONT_SRC", str, ["'self'", "https://fonts.gstatic.com", "data:"]
-)
-# Redoc requires blob
-CSP_WORKER_SRC = env.list("CSP_WORKER_SRC", str, ["'self'", "blob:"])
 
+# Consider tracking CSP reports with GlitchTip itself
 # Enable Chatwoot only when configured
-default_connect_src = ["'self'", "https://*.glitchtip.com"]
+default_connect_src = [SELF, "https://*.glitchtip.com"]
 if CHATWOOT_WEBSITE_TOKEN:
     default_connect_src.append("https://app.chatwoot.com")
-CSP_CONNECT_SRC = env.list("CSP_CONNECT_SRC", str, default_connect_src)
-
 # Enable stripe by default only when configured
 stripe_domain = "https://js.stripe.com"
 default_script_src = [
-    "'self'",
+    SELF,
     "https://*.glitchtip.com",
-    "'sha256-0Mfn7rrvFFIfp4wc7eyyIWdGty6Fhc4qVG7t12eqtio='",  # Theme picker inline JS
+    "'sha256-iRcDQ27XiXX4k+jbJ8nGeQFBnBOjmII7FdMlixb6QE4='",  # Theme picker inline JS
 ]
-default_frame_src = ["'self'"]
+default_frame_src = [SELF]
 if BILLING_ENABLED:
     default_script_src.append(stripe_domain)
     default_frame_src.append(stripe_domain)
+CONTENT_SECURITY_POLICY = {
+    "DIRECTIVES": {
+        "default-src": env.list("CSP_DEFAULT_SRC", str, [SELF]) + [NONCE],
+        # https://github.com/swimlane/ngx-charts/issues/1937
+        # Use this once unsafe-inline is removed
+        "style-src": env.list("CSP_STYLE_SRC", str, [SELF, UNSAFE_INLINE]),
+        "font-src": env.list("CSP_FONT_SRC", str, [SELF, "data:"]),
+        "connect-src": env.list("CSP_CONNECT_SRC", str, default_connect_src),
+        "script-src": env.list("CSP_SCRIPT_SRC", str, default_script_src) + [NONCE],
+        "img-src": env.list("CSP_IMG_SRC", str, [SELF]),
+        "frame-src": env.list("CSP_FRAME_SRC", str, default_frame_src),
+        "report-uri": env.tuple("CSP_REPORT_URI", str, None),
+    },
+    "REPORT_PERCENTAGE": env.float("CSP_REPORT_PERCENTAGE", 10.0),
+}
+if "CSP_STYLE_SRC_ELEM" in os.environ:
+    CONTENT_SECURITY_POLICY["DIRECTIVES"]["style-src-elem"] = env.list(
+        "CSP_STYLE_SRC_ELEM", str
+    )
+if "CSP_WORKER_SRC" in os.environ:
+    CONTENT_SECURITY_POLICY["DIRECTIVES"]["worker-src"] = env.list(
+        "CSP_WORKER_SRC", str
+    )
+csp_report_only = env.bool("CSP_REPORT_ONLY", False)
+if csp_report_only:
+    CONTENT_SECURITY_POLICY_REPORT_ONLY = CONTENT_SECURITY_POLICY
+    CONTENT_SECURITY_POLICY = {"DIRECTIVES": {}}
 
-CSP_SCRIPT_SRC = env.list("CSP_SCRIPT_SRC", str, default_script_src)
-CSP_IMG_SRC = env.list("CSP_IMG_SRC", str, ["'self'"])
-CSP_FRAME_SRC = env.list("CSP_FRAME_SRC", str, default_frame_src)
-# Consider tracking CSP reports with GlitchTip itself
-CSP_REPORT_URI = env.tuple("CSP_REPORT_URI", str, None)
-CSP_REPORT_ONLY = env.bool("CSP_REPORT_ONLY", False)
+
 SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", 0)
 SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", False)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
@@ -427,22 +465,25 @@ if DATABASE_HOST and DATABASE_PASSWORD:
         "CONN_MAX_AGE": env.int("DATABASE_CONN_MAX_AGE", 0),
         "CONN_HEALTH_CHECKS": env.bool("DATABASE_CONN_HEALTH_CHECKS", False),
     }
-DATABASES["default"]["ENGINE"] = "psqlextra.backend"
-DATABASES["default"]["OPTIONS"] = {}
-if env.bool("DATABASE_POOL", False):
-    pool_options = {}
-    min_size = env.int("DATABASE_POOL_MIN_SIZE", None)
-    max_size = env.int("DATABASE_POOL_MAX_SIZE", None)
+DATABASES["default"]["ENGINE"] = "psql_partition.backend"
+if not DATABASES["default"].get("OPTIONS"):
+    DATABASES["default"]["OPTIONS"] = {}
+# Enable pool by default, if there is no conn_max_age
+if DATABASES["default"].get("CONN_MAX_AGE", 0) == 0:
+    if env.bool("DATABASE_POOL", True):
+        pool_options = {}
+        min_size = env.int("DATABASE_POOL_MIN_SIZE", 2)
+        max_size = env.int("DATABASE_POOL_MAX_SIZE", 6)
 
-    if min_size:
-        pool_options["min_size"] = min_size
-    if max_size:
-        pool_options["max_size"] = max_size
+        if min_size:
+            pool_options["min_size"] = min_size
+        if max_size:
+            pool_options["max_size"] = max_size
 
-    if pool_options:
-        DATABASES["default"]["OPTIONS"]["pool"] = pool_options
-    else:
-        DATABASES["default"]["OPTIONS"]["pool"] = True
+        if pool_options:
+            DATABASES["default"]["OPTIONS"]["pool"] = pool_options
+        else:
+            DATABASES["default"]["OPTIONS"]["pool"] = True
 
 PSQLEXTRA_PARTITIONING_MANAGER = "glitchtip.partitioning.manager"
 
@@ -529,11 +570,16 @@ else:  # Default to REDIS when unset
     }
 if cache_sentinel_url := env.str("CACHE_SENTINEL_URL", None):
     try:
-        cache_sentinel_host, cache_sentinel_port = cache_sentinel_url.split(":")
-        SENTINELS = [(cache_sentinel_host, int(cache_sentinel_port))]
+        # splits "host1:port,host2:port" into [("host1", port), ("host2", port)]
+        SENTINELS = [
+            (host, int(port))
+            for host, port in (
+                hostport.split(":", 1) for hostport in cache_sentinel_url.split(",")
+            )
+        ]
     except ValueError as err:
         raise ImproperlyConfigured(
-            "Invalid cache redis sentinel url, format is host:port"
+            "Invalid cache redis sentinel url, format is host:port,host2:port2,..."
         ) from err
     DJANGO_REDIS_CONNECTION_FACTORY = "django_redis.pool.SentinelConnectionFactory"
     CACHES["default"]["OPTIONS"]["SENTINELS"] = SENTINELS
@@ -641,18 +687,18 @@ if os.getenv(
 ):  # Careful, this will override most EMAIL_*** settings. Set them all individually, or use EMAIL_URL to set them all at once, but don't do both.
     EMAIL_CONFIG = env.email_url("EMAIL_URL")
     vars().update(EMAIL_CONFIG)
+EMAIL_INVITE_THROTTLE_COUNT = env.int("EMAIL_THROTTLE_COUNT", 50)
+EMAIL_INVITE_THROTTLE_INTERVAL = env.int("EMAIL_THROTTLE_INTERVAL", 300) # 5 minutes
+EMAIL_INVITE_REQUIRE_VERIFICATION = env.bool("EMAIL_INVITE_REQUIRE_VERIFICATION", False)
 
 AUTH_USER_MODEL = "users.User"
 ACCOUNT_ADAPTER = "glitchtip.adapters.CustomDefaultAccountAdapter"
-ACCOUNT_AUTHENTICATION_METHOD = "email"
-ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_USERNAME_REQUIRED = False
+ACCOUNT_LOGIN_METHODS = {"email"}
+ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_REAUTHENTICATION_TIMEOUT = SESSION_COOKIE_AGE  # Disabled for now
 LOGIN_REDIRECT_URL = "/"
 LOGIN_URL = "/login"
-# This config will later default to True and then be removed
-USE_NEW_SOCIAL_CALLBACKS = env.bool("USE_NEW_SOCIAL_CALLBACKS", False)
 HEADLESS_ONLY = True
 HEADLESS_FRONTEND_URLS = {
     "account_signup": "/login",
@@ -661,7 +707,10 @@ HEADLESS_FRONTEND_URLS = {
     "account_reset_password_from_key": "/reset-password/set-new-password/{key}",
     "socialaccount_login_error": "/login?socialLoginError=true",
 }
+HEADLESS_CLIENTS = ("browser",)
+HEADLESS_SERVE_SPECIFICATION = True
 MFA_TOTP_ISSUER = GLITCHTIP_URL.hostname
+MFA_TOTP_TOLERANCE = 1
 MFA_SUPPORTED_TYPES = ["totp", "webauthn", "recovery_codes"]
 MFA_PASSKEY_LOGIN_ENABLED = True
 MFA_WEBAUTHN_ALLOW_INSECURE_ORIGIN = DEBUG
@@ -729,12 +778,6 @@ if LOGGING_HANDLER_CLASS is not logging.StreamHandler:
         logger.addHandler(handler())
 
 
-def organization_request_callback(request):
-    raise ImproperlyConfigured(
-        "Organization request callback required by dj-stripe but not used."
-    )
-
-
 # Set to track activity with Plausible
 PLAUSIBLE_URL = env.str("PLAUSIBLE_URL", default=None)
 PLAUSIBLE_DOMAIN = env.str("PLAUSIBLE_DOMAIN", default=None)
@@ -743,39 +786,16 @@ PLAUSIBLE_DOMAIN = env.str("PLAUSIBLE_DOMAIN", default=None)
 # Support plans available. Email info@burkesoftware.com for more info.
 I_PAID_FOR_GLITCHTIP = env.bool("I_PAID_FOR_GLITCHTIP", False)
 
-# Max events per month for free tier
-BILLING_FREE_TIER_EVENTS = env.int("BILLING_FREE_TIER_EVENTS", 1000)
-DJSTRIPE_SUBSCRIBER_MODEL = "organizations_ext.Organization"
-DJSTRIPE_SUBSCRIBER_MODEL_REQUEST_CALLBACK = organization_request_callback
-DJSTRIPE_USE_NATIVE_JSONFIELD = True
-DJSTRIPE_FOREIGN_KEY_TO_FIELD = "djstripe_id"
-STRIPE_AUTOMATIC_TAX = env.bool("STRIPE_AUTOMATIC_TAX", False)
-STRIPE_LIVE_MODE = env.bool("STRIPE_LIVE_MODE", False)
+MARKETING_URL = "https://glitchtip.com"
 if BILLING_ENABLED:
     I_PAID_FOR_GLITCHTIP = True
-    INSTALLED_APPS.append("djstripe")
-    INSTALLED_APPS.append("apps.djstripe_ext")
-    STRIPE_TEST_PUBLIC_KEY = env.str("STRIPE_TEST_PUBLIC_KEY", None)
-    STRIPE_TEST_SECRET_KEY = env.str("STRIPE_TEST_SECRET_KEY", None)
-    STRIPE_LIVE_PUBLIC_KEY = env.str("STRIPE_LIVE_PUBLIC_KEY", None)
-    STRIPE_LIVE_SECRET_KEY = env.str("STRIPE_LIVE_SECRET_KEY", None)
-    DJSTRIPE_WEBHOOK_SECRET = env.str("DJSTRIPE_WEBHOOK_SECRET", None)
-    CELERY_BEAT_SCHEDULE["set-organization-throttle"] = {
-        "task": "apps.organizations_ext.tasks.set_organization_throttle",
-        "schedule": crontab(hour=7, minute=1),
-    }
-    CELERY_BEAT_SCHEDULE["warn-organization-throttle"] = {
-        "task": "apps.djstripe_ext.tasks.warn_organization_throttle",
-        "schedule": crontab(minute=30),
+    CELERY_BEAT_SCHEDULE["check-all-organizations-throttle"] = {
+        "task": "apps.organizations_ext.tasks.check_all_organizations_throttle",
+        "schedule": timedelta(hours=4),
     }
 elif TESTING:
-    # Must run tests with djstripe enabled
+    # Must run tests with billing enabled
     BILLING_ENABLED = True
-    INSTALLED_APPS.append("djstripe")
-    INSTALLED_APPS.append("apps.djstripe_ext")
-    STRIPE_TEST_PUBLIC_KEY = "fake"
-    STRIPE_TEST_SECRET_KEY = "sk_test_fake"  # nosec
-    DJSTRIPE_WEBHOOK_SECRET = "whsec_fake"  # nosec
     logging.disable(logging.WARNING)
 
 CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", False)
@@ -784,6 +804,7 @@ if TESTING:
     # Optimization
     PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
     DATABASES["default"]["CONN_MAX_AGE"] = None
+    DATABASES["default"]["OPTIONS"]["pool"] = False
     CELERY_TASK_ALWAYS_EAGER = True
     SESSION_ENGINE = "django.contrib.sessions.backends.cache"
     STORAGES = global_settings.STORAGES

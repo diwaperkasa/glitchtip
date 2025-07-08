@@ -9,10 +9,10 @@ from django.utils.timezone import now
 from ninja import Field
 from pydantic import (
     AliasChoices,
+    BaseModel,
     BeforeValidator,
     JsonValue,
     RootModel,
-    ValidationError,
     WrapValidator,
     field_validator,
     model_validator,
@@ -21,7 +21,7 @@ from pydantic import (
 from apps.issue_events.constants import IssueEventType
 
 from ..shared.schema.base import LaxIngestSchema
-from ..shared.schema.contexts import ContextsSchema
+from ..shared.schema.contexts import Contexts
 from ..shared.schema.event import (
     BaseIssueEvent,
     BaseRequest,
@@ -35,10 +35,10 @@ logger = logging.getLogger(__name__)
 
 
 CoercedStr = Annotated[
-    str, BeforeValidator(lambda v: str(v) if isinstance(v, bool) else v)
+    str, BeforeValidator(lambda v: str(v) if isinstance(v, (bool, list)) else v)
 ]
 """
-Coerced Str that will coerce bool to str when found
+Coerced Str that will coerce bool/list to str when found
 """
 
 
@@ -139,7 +139,9 @@ class EventException(LaxIngestSchema):
     value: Annotated[str | None, WrapValidator(invalid_to_none)] = None
     module: str | None = None
     thread_id: str | None = None
-    mechanism: ExceptionMechanism | None = None
+    mechanism: Annotated[ExceptionMechanism | None, WrapValidator(invalid_to_none)] = (
+        None
+    )
     stacktrace: Annotated[StackTrace | None, WrapValidator(invalid_to_none)] = None
 
     @model_validator(mode="after")
@@ -161,7 +163,7 @@ class ValueEventException(LaxIngestSchema):
 class EventMessage(LaxIngestSchema):
     formatted: str = Field(max_length=8192, default="")
     message: str | None = None
-    params: Union[list[str], dict[str, str]] | None = None
+    params: list[CoercedStr] | dict[str, str] | None = None
 
     @model_validator(mode="after")
     def set_formatted(self) -> "EventMessage":
@@ -172,7 +174,13 @@ class EventMessage(LaxIngestSchema):
         if not self.formatted and self.message:
             params = self.params
             if isinstance(params, list) and params:
-                self.formatted = self.message % tuple(params)
+                formatted_params = tuple(
+                    int(p) if isinstance(p, str) and p.isdigit() else p for p in params
+                )
+                try:
+                    self.formatted = self.message % tuple(formatted_params)
+                except TypeError:
+                    pass
             elif isinstance(params, dict):
                 self.formatted = self.message.format(**params)
         return self
@@ -185,6 +193,25 @@ class EventTemplate(LaxIngestSchema):
     context_line: str
     pre_context: list[str] | None = None
     post_context: list[str] | None = None
+
+
+# Important, for some reason using Schema will cause the DebugImage union not to work
+class SourceMapImage(BaseModel):
+    type: Literal["sourcemap"]
+    code_file: str
+    debug_id: uuid.UUID
+
+
+# Important, for some reason using Schema will cause the DebugImage union not to work
+class OtherDebugImage(BaseModel):
+    type: str
+
+
+DebugImage = Annotated[SourceMapImage, Field(discriminator="type")] | OtherDebugImage
+
+
+class DebugMeta(LaxIngestSchema):
+    images: list[DebugImage]
 
 
 class ValueEventBreadcrumb(LaxIngestSchema):
@@ -215,7 +242,7 @@ class RequestEnv(LaxIngestSchema):
     remote_addr: str | None
 
 
-QueryString = Union[str, ListKeyValue, dict[str, str | None]]
+QueryString = str | ListKeyValue | dict[str, str | dict[str, Any] | None]
 """Raw URL querystring, list, or dict"""
 KeyValueFormat = Union[list[list[str | None]], dict[str, CoercedStr | None]]
 """
@@ -267,6 +294,7 @@ class IngestRequest(BaseRequest):
 
 
 class IngestIssueEvent(BaseIssueEvent):
+    event_id: uuid.UUID | None = None
     timestamp: datetime = Field(default_factory=now)
     level: str | None = "error"
     logentry: EventMessage | None = None
@@ -281,18 +309,19 @@ class IngestIssueEvent(BaseIssueEvent):
     environment: str | None = None
     modules: dict[str, str | None] | None = None
     extra: dict[str, Any] | None = None
-    fingerprint: list[str] | None = None
+    fingerprint: list[Union[str, None]] | None = None
     errors: list[Any] | None = None
 
-    exception: Union[list[EventException], ValueEventException] | None = None
+    exception: list[EventException] | ValueEventException | None = None
     message: Union[str, EventMessage] | None = None
     template: EventTemplate | None = None
 
     breadcrumbs: Union[list[EventBreadcrumb], ValueEventBreadcrumb] | None = None
     sdk: ClientSDKInfo | None = None
     request: IngestRequest | None = None
-    contexts: ContextsSchema | None = None
-    user: EventUser | None = None
+    contexts: Contexts | None = None
+    user: Annotated[EventUser | None, WrapValidator(invalid_to_none)] = None
+    debug_meta: DebugMeta | None = None
 
     @field_validator("tags")
     @classmethod
@@ -338,7 +367,17 @@ class EnvelopeHeaderSchema(LaxIngestSchema):
 
 SupportedItemType = Literal["transaction", "event"]
 IgnoredItemType = Literal[
-    "session", "sessions", "client_report", "attachment", "user_report", "check_in"
+    "log",
+    "session",
+    "sessions",
+    "client_report",
+    "attachment",
+    "user_report",
+    "check_in",
+    "profile",
+    "replay_recording",
+    "replay_event",
+    "span",
 ]
 SUPPORTED_ITEMS = typing.get_args(SupportedItemType)
 
@@ -355,33 +394,6 @@ class EnvelopeSchema(RootModel[list[dict[str, Any]]]):
     _items: list[
         tuple[ItemHeaderSchema, IngestIssueEvent | TransactionEventSchema]
     ] = []
-
-    @model_validator(mode="after")
-    def validate_envelope(self) -> "EnvelopeSchema":
-        data = self.root
-        try:
-            header = data.pop(0)
-        except IndexError:
-            raise ValidationError([{"message": "Envelope is empty"}])
-        self._header = EnvelopeHeaderSchema(**header)
-
-        while len(data) >= 2:
-            item_header_data = data.pop(0)
-            if item_header_data.get("type", None) not in SUPPORTED_ITEMS:
-                continue
-            item_header = ItemHeaderSchema(**item_header_data)
-            if item_header.type == "event":
-                try:
-                    item = IngestIssueEvent(**data.pop(0))
-                except ValidationError as err:
-                    logger.warning("Envelope Event item invalid", exc_info=True)
-                    raise err
-                self._items.append((item_header, item))
-            elif item_header.type == "transaction":
-                item = TransactionEventSchema(**data.pop(0))
-                self._items.append((item_header, item))
-
-        return self
 
 
 class CSPReportSchema(LaxIngestSchema):

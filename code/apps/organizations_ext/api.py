@@ -1,9 +1,11 @@
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.contrib.auth import aget_user
+from django.core.cache import cache
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import aget_object_or_404
 from ninja import Router
-from ninja.errors import HttpError
+from ninja.errors import HttpError, Throttled, ValidationError
 from ninja.pagination import paginate
 from organizations.backends import invitation_backend
 from organizations.signals import owner_changed, user_added
@@ -15,13 +17,9 @@ from apps.users.utils import ais_user_registration_open
 from glitchtip.api.authentication import AuthHttpRequest
 from glitchtip.api.permissions import has_permission
 
+from .constants import OrganizationUserRole
 from .invitation_backend import InvitationTokenGenerator
-from .models import (
-    Organization,
-    OrganizationOwner,
-    OrganizationUser,
-    OrganizationUserRole,
-)
+from .models import Organization, OrganizationOwner, OrganizationUser
 from .queryset_utils import get_organization_users_queryset, get_organizations_queryset
 from .schema import (
     AcceptInviteIn,
@@ -121,6 +119,7 @@ async def update_organization(
             request.auth.user_id,
             role_required=True,
             add_details=True,
+            organization_slug=organization_slug,
         ),
         slug=organization_slug,
     )
@@ -139,8 +138,11 @@ async def update_organization(
 @has_permission(["org:admin"])
 async def delete_organization(request: AuthHttpRequest, organization_slug: str):
     organization = await aget_object_or_404(
-        get_organizations_queryset(request.auth.user_id, role_required=True),
-        slug=organization_slug,
+        get_organizations_queryset(
+            request.auth.user_id,
+            role_required=True,
+            organization_slug=organization_slug,
+        )
     )
     if organization.actor_role < OrganizationUserRole.MANAGER:
         raise HttpError(403, "forbidden")
@@ -204,12 +206,17 @@ async def get_organization_member(
 async def create_organization_member(
     request: AuthHttpRequest, organization_slug: str, payload: OrganizationUserIn
 ):
-    user_id = request.auth.user_id
+    user = await User.objects.aget(id=request.auth.user_id)
+
+    if settings.EMAIL_INVITE_REQUIRE_VERIFICATION and not await user.emailaddress_set.filter(verified=True).aexists():
+        raise HttpError(403, "User must have a verified email address")
+
     organization = await aget_object_or_404(
-        get_organizations_queryset(user_id, role_required=True)
-        .filter(organization_users__user=user_id)
+        get_organizations_queryset(
+            user.id, role_required=True, organization_slug=organization_slug
+        )
+        .filter(organization_users__user=user)
         .prefetch_related("organization_users"),
-        slug=organization_slug,
     )
     if organization.actor_role < OrganizationUserRole.MANAGER:
         raise HttpError(403, "forbidden")
@@ -224,6 +231,19 @@ async def create_organization_member(
             409,
             f"The user {email} is already a member",
         )
+
+    # Implement throttle using django cache
+    count = settings.EMAIL_INVITE_THROTTLE_COUNT
+    interval = settings.EMAIL_INVITE_THROTTLE_INTERVAL
+    cache_key = f"email_invite_throttle_{user.id}"
+    invite_attempts = cache.get(cache_key, 0)
+    if invite_attempts >= count:
+        raise Throttled(count)
+    if invite_attempts == 0:
+        cache.set(cache_key, 1, interval)
+    else:
+        cache.incr(cache_key)
+
     member, created = await OrganizationUser.objects.aget_or_create(
         email=email,
         organization=organization,
@@ -245,6 +265,9 @@ async def create_organization_member(
         await member.teams.aadd(*teams)
 
     await sync_to_async(invitation_backend().send_invitation)(member)
+    member = await get_organization_users_queryset(user.id, organization_slug).aget(
+        id=member.id
+    )
     return 201, member
 
 
@@ -268,7 +291,10 @@ async def delete_organization_member(
         get_organization_users_queryset(user_id, organization_slug, role_required=True),
         id=member_id,
     )
-    if org_user.actor_role < OrganizationUserRole.MANAGER:
+    # Check org role of user initiating request, but allow org users to remove themselves
+    if org_user.actor_role < OrganizationUserRole.MANAGER and not (
+        org_user.user and org_user.user.id == user_id
+    ):
         raise HttpError(403, "Forbidden")
     await org_user.adelete()
 
@@ -300,6 +326,16 @@ async def update_organization_member(
     if member.actor_role < OrganizationUserRole.MANAGER:
         raise HttpError(403, "Forbidden")
     member.role = OrganizationUserRole.from_string(payload.org_role)
+    # Disallow an ownerless organization
+    if (
+        member.role < OrganizationUserRole.OWNER
+        and not await OrganizationUser.objects.exclude(id=member_id)
+        .filter(
+            organization__slug=organization_slug, role__gte=OrganizationUserRole.OWNER
+        )
+        .aexists()
+    ):
+        raise ValidationError("Organization must have at least one owner")
     await member.asave()
     return member
 
@@ -345,7 +381,7 @@ async def validate_token(org_user_id: int, token: str) -> OrganizationUser:
     """Validate invite token and return org user"""
     org_user = await aget_object_or_404(
         OrganizationUser.objects.all()
-        .select_related("organization", "user")
+        .select_related("organization__owner", "user")
         .prefetch_related("user__socialaccount_set"),
         pk=org_user_id,
     )
@@ -382,7 +418,7 @@ async def accept_invite(
         await org_user.asave()
     org_user = (
         await OrganizationUser.objects.filter(pk=org_user.pk)
-        .select_related("organization", "user")
+        .select_related("organization__owner", "user")
         .prefetch_related("user__socialaccount_set")
         .aget()
     )

@@ -1,5 +1,5 @@
-import { I18nPluralPipe } from '@angular/common';
-import { Component, OnInit, Input, Output, EventEmitter } from "@angular/core";
+import { I18nPluralPipe } from "@angular/common";
+import { Component, OnInit, input, output } from "@angular/core";
 import {
   FormGroup,
   FormControl,
@@ -44,7 +44,6 @@ export const selectionRequiredValidator: ValidatorFn = (
   selector: "gt-alert-form",
   templateUrl: "./alert-form.component.html",
   styleUrls: ["./alert-form.component.scss"],
-  standalone: true,
   imports: [
     I18nPluralPipe,
     ReactiveFormsModule,
@@ -56,27 +55,27 @@ export const selectionRequiredValidator: ValidatorFn = (
   ],
 })
 export class AlertFormComponent implements OnInit {
-  @Input() loading: boolean | null = false;
-  @Input() timespan: number | null = 1;
-  @Input() quantity: number | null = 1;
-  @Input() uptime: boolean | null = false;
-  @Input() errorAlert: boolean = true;
-  @Output() alertSubmit = new EventEmitter<{
+  readonly loading = input<boolean | null>(false);
+  readonly timespan = input<number | null>(1);
+  readonly quantity = input<number | null>(1);
+  readonly uptime = input<boolean | null>(false);
+  readonly errorAlert = input<boolean>(true);
+  readonly alertSubmit = output<{
     timespanMinutes: number;
     quantity: number;
     uptime: boolean;
   }>();
-  @Input() newAlert: boolean | undefined = false;
+  readonly newAlert = input<boolean | undefined>(false);
 
   timesI18nMapping = {
-    '=1': $localize `time`,
-    'other': $localize `times`
+    "=1": $localize`time`,
+    other: $localize`times`,
   };
 
   minutesI18nMapping = {
-    '=1': $localize `minute`,
-    'other': $localize `minutes`
-  }
+    "=1": $localize`minute`,
+    other: $localize`minutes`,
+  };
 
   intervalValidators = [
     Validators.min(0),
@@ -116,16 +115,18 @@ export class AlertFormComponent implements OnInit {
   constructor() {}
 
   ngOnInit(): void {
+    const timespan = this.timespan();
+    const quantity = this.quantity();
     this.projectAlertForm.setValue({
-      timespanMinutes: this.timespan ? this.timespan.toString() : null,
-      quantity: this.quantity ? this.quantity.toString() : null,
+      timespanMinutes: timespan ? timespan.toString() : null,
+      quantity: quantity ? quantity.toString() : null,
       optionsGroup: {
-        uptime: this.uptime as any,
-        errorAlert: this.errorAlert as any,
+        uptime: this.uptime() as any,
+        errorAlert: this.errorAlert() as any,
       },
     });
 
-    if (this.errorAlert) {
+    if (this.errorAlert()) {
       this.initializeIntervalValidation();
     }
   }

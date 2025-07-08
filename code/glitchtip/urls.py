@@ -6,8 +6,11 @@ from django.views.generic import TemplateView
 from django.views.generic.base import RedirectView
 from organizations.backends import invitation_backend
 
+from apps.event_ingest.views import event_envelope_view
+from apps.stripe.views import stripe_webhook_view
+
 from .api.api import api
-from .views import health
+from .views import health, index
 
 urlpatterns = [
     path("_health/", health),
@@ -19,6 +22,7 @@ urlpatterns = [
         "robots.txt",
         TemplateView.as_view(template_name="robots.txt", content_type="text/plain"),
     ),
+    path("api/<int:project_id>/envelope/", event_envelope_view),
     path("api/", RedirectView.as_view(url="/profile/auth-tokens")),
     # OSS Sentry compat - redirect the non-api prefix url to the more typical api prefix
     path(
@@ -28,9 +32,17 @@ urlpatterns = [
         ),
     ),
     path("api/", api.urls),
+    path("stripe/webhook/", stripe_webhook_view, name="stripe_webhook"),
+    path(
+        "stripe/webhook/<str:event_type>/",
+        stripe_webhook_view,
+        name="stripe_webhook_with_type",
+    ),
 ]
 
 if "django.contrib.admin" in settings.INSTALLED_APPS:
+    if settings.GLITCHTIP_INSTANCE_NAME:
+        admin.site.site_header = settings.GLITCHTIP_INSTANCE_NAME
     urlpatterns += [
         path("admin/", admin.site.urls),
     ]
@@ -41,16 +53,13 @@ urlpatterns += [
     path("accounts/", include("allauth.urls")),
     path("_allauth/", include("allauth.headless.urls")),
     # These routes belong to the Angular single page app
-    re_path(r"^$", TemplateView.as_view(template_name="index.html")),
+    re_path(r"^$", index),
     re_path(
-        r"^(auth|login|register|(.*)/issues|(.*)/settings|(.*)/performance|(.*)/projects|(.*)/releases|organizations|profile|(.*)/uptime-monitors|accept|reset-password).*$",
-        TemplateView.as_view(template_name="index.html"),
+        r"^(auth|login|register|(.*)/issues|(.*)/settings|(.*)/performance|(.*)/projects|(.*)/releases|organizations|profile|(.*)/uptime-monitors|accept|reset-password|system-info).*$",
+        index,
     ),
     path("accept/", include(invitation_backend().get_urls())),
 ]
-
-if settings.BILLING_ENABLED:
-    urlpatterns.append(path("stripe/", include("djstripe.urls", namespace="djstripe")))
 
 if settings.DEBUG_TOOLBAR:
     urlpatterns.append(path("__debug__/", include("debug_toolbar.urls")))

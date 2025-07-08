@@ -1,7 +1,5 @@
 import hashlib
-from typing import TYPE_CHECKING, List, Optional, Union
-
-from django.core.cache import cache
+from typing import TYPE_CHECKING
 
 from .schema import EventMessage
 
@@ -14,7 +12,7 @@ def default_hash_input(title: str, culprit: str, type: "IssueEventType") -> str:
 
 
 def generate_hash(
-    title: str, culprit: str, type: "IssueEventType", extra: Optional[List[str]] = None
+    title: str, culprit: str, type: "IssueEventType", extra: list[str] | None = None
 ) -> str:
     """Generate insecure hash used for grouping issues"""
     if extra:
@@ -22,7 +20,7 @@ def generate_hash(
             [
                 default_hash_input(title, culprit, type)
                 if part == "{{ default }}"
-                else part
+                else (part or "")
                 for part in extra
             ]
         )
@@ -31,7 +29,7 @@ def generate_hash(
     return hashlib.md5(hash_input.encode()).hexdigest()
 
 
-def transform_parameterized_message(message: Union[str, EventMessage]) -> str:
+def transform_parameterized_message(message: str | EventMessage) -> str:
     """
     Accept str or Event Message interface
     Returns formatted string with interpolation
@@ -60,14 +58,26 @@ def transform_parameterized_message(message: Union[str, EventMessage]) -> str:
     return message.formatted
 
 
-def cache_set_nx(key, value, timeout: Optional[int] = 300) -> bool:
-    """
-    django-redis style cache set with nx, but with fallback for non-redis
-    """
-    try:
-        return cache.set(key, value, timeout, nx=True)
-    except TypeError:
-        if cache.get(key):
-            return False
-        cache.set(key, value, timeout)
-        return True
+Replacable = str | dict | list
+KNOWN_BADS = ["\u0000"]
+
+
+def _clean_string(s: str) -> str:
+    for char in KNOWN_BADS:
+        s = s.replace(char, "")
+    return s
+
+
+def remove_bad_chars(obj: Replacable) -> Replacable:
+    """Remove charachers which postgresql cannot store"""
+
+    if isinstance(obj, dict):
+        return {
+            _clean_string(key): remove_bad_chars(value) for key, value in obj.items()
+        }
+    elif isinstance(obj, list):
+        return [remove_bad_chars(item) for item in obj]
+    elif isinstance(obj, str):
+        return _clean_string(obj)
+    else:
+        return obj

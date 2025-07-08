@@ -1,107 +1,104 @@
-import { Injectable } from "@angular/core";
-import { HttpErrorResponse } from "@angular/common/http";
+import { computed, effect, inject, Injectable } from "@angular/core";
 import { MatSnackBar } from "@angular/material/snack-bar";
-import { EMPTY, lastValueFrom, Subject } from "rxjs";
-import { tap, map, catchError, exhaustMap } from "rxjs/operators";
-import { StatefulService } from "src/app/shared/stateful-service/stateful-service";
-import { User, UserOptions } from "./user.interfaces";
-import { UserAPIService } from "./user-api.service";
+import { client } from "../../shared/api/api";
+import { components } from "../api-schema";
+import { AuthService } from "src/app/auth.service";
+import { StatefulService } from "src/app/shared/stateful-service/signal-state.service";
+import { apiResource } from "src/app/shared/api/api-resource-factory";
+
+type UserOptions = components["schemas"]["UserOptions"];
 
 interface UserState {
-  user: User | null;
   userDeleteError: string | null;
   userDeleteLoading: boolean;
   disconnectLoading: number | null;
 }
 
 const initialState: UserState = {
-  user: null,
   userDeleteError: null,
   userDeleteLoading: false,
   disconnectLoading: null,
 };
 
+const mePath = { user_id: "me" } as const;
+
 @Injectable({
   providedIn: "root",
 })
 export class UserService extends StatefulService<UserState> {
-  readonly userDetails$ = this.state.pipe(map((state) => state.user));
-  readonly userDeleteError$ = this.state.pipe(
-    map((state) => state.userDeleteError),
-  );
-  readonly userDeleteLoading$ = this.state.pipe(
-    map((state) => state.userDeleteLoading),
-  );
-  readonly disconnectLoading$ = this.state.pipe(
-    map((state) => state.disconnectLoading),
-  );
-  private readonly getUserDetailsAction = new Subject();
+  private snackBar = inject(MatSnackBar);
 
-  readonly activeUserEmail$ = this.userDetails$.pipe(
-    map((userDetails) => userDetails?.email),
-  );
+  authService = inject(AuthService);
 
-  constructor(
-    private snackBar: MatSnackBar,
-    private userAPIService: UserAPIService,
-  ) {
+  userResource = apiResource(this.authService.isAuthenticated, () => ({
+    url: "/api/0/users/{user_id}/",
+    options: {
+      params: { path: mePath },
+    },
+  }));
+  user = computed(() => this.userResource.value());
+  activeUserEmail = computed(() => this.user()?.email);
+  readonly userDeleteError = computed(() => this.state().userDeleteError);
+  readonly userDeleteLoading = computed(() => this.state().userDeleteLoading);
+  readonly disconnectLoading = computed(() => this.state().disconnectLoading);
+
+  constructor() {
     super(initialState);
-    this.getUserDetailsAction
-      .pipe(
-        exhaustMap(() =>
-          this.userAPIService.retrieve().pipe(
-            tap((resp: User) => {
-              this.setUserDetails(resp);
-              if (resp.chatwootIdentifierHash) {
-                let chatwootUser = {
-                  email: resp.email,
-                  identifier_hash: resp.chatwootIdentifierHash,
-                };
-                // Chatwoot may not always be ready at this point
-                if ((window as any).$chatwoot) {
-                  (window as any).$chatwoot.setUser(resp.id, chatwootUser);
-                } else {
-                  window.addEventListener("chatwoot:ready", function () {
-                    (window as any).$chatwoot.setUser(resp.id, chatwootUser);
-                  });
-                }
-              }
-            }),
-            catchError(() => EMPTY),
-          ),
-        ),
-      )
-      .subscribe();
+    setTimeout(() => this.refresh(), 10000);
+    effect(() => {
+      const user = this.user();
+      if (user?.chatwootIdentifierHash) {
+        let chatwootUser = {
+          email: user.email,
+          identifier_hash: user.chatwootIdentifierHash,
+        };
+        // Chatwoot may not always be ready at this point
+        if ((window as any).$chatwoot) {
+          (window as any).$chatwoot.setUser(user.id, chatwootUser);
+        } else {
+          window.addEventListener("chatwoot:ready", function () {
+            (window as any).$chatwoot.setUser(user.id, chatwootUser);
+          });
+        }
+      }
+    });
   }
 
   /** Get and set current logged in user details from backend */
   getUserDetails() {
-    this.getUserDetailsAction.next(undefined);
+    this.userResource.reload();
   }
 
   deleteUser() {
     this.setUserDeleteLoadingStart();
-    return this.userAPIService.destroy().pipe(
-      catchError((err) => {
-        if (err instanceof HttpErrorResponse) {
-          this.setUserDeleteError(
-            err.error?.message ? err.error?.message : "Unable to delete user",
-          );
+    return client
+      .DELETE("/api/0/users/{user_id}/", {
+        params: { path: mePath },
+      })
+      .then((result) => {
+        if (result.error) {
+          // TODO get error message
+          this.setUserDeleteError("Unable to delete user");
         }
-        return EMPTY;
-      }),
-    );
+      });
   }
 
   updateUser(name: string, options: UserOptions) {
-    lastValueFrom(
-      this.userAPIService.update({ name, options }).pipe(
-        tap((resp) => {
-          this.setUserDetails(resp);
+    client
+      .PUT("/api/0/users/{user_id}/", {
+        params: {
+          path: mePath,
+        },
+        body: { name, options },
+      })
+      .then((result) => {
+        if (result.data) {
+          this.userResource.set(result.data);
           this.snackBar.open("Preferences have been updated");
-        }),
-      ),
-    );
+        } else {
+          this.snackBar.open("Error attempting to update preferences");
+        }
+      });
   }
 
   clearUserUIState() {
@@ -112,14 +109,14 @@ export class UserService extends StatefulService<UserState> {
     });
   }
 
+  reload() {
+    this.userResource.reload();
+  }
+
   private setUserDeleteLoadingStart() {
     this.setState({
       userDeleteLoading: true,
     });
-  }
-
-  private setUserDetails(user: User) {
-    this.setState({ user });
   }
 
   private setUserDeleteError(error: string) {
@@ -127,5 +124,10 @@ export class UserService extends StatefulService<UserState> {
       userDeleteLoading: false,
       userDeleteError: error,
     });
+  }
+
+  private refresh() {
+    this.reload();
+    setTimeout(() => this.refresh(), 20 * 60 * 1000); // 20 min
   }
 }

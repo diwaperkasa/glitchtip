@@ -1,7 +1,5 @@
 import logging
-from typing import Optional
 
-import orjson
 from allauth.socialaccount.models import SocialApp
 from allauth.socialaccount.providers.openid_connect.views import (
     OpenIDConnectOAuth2Adapter,
@@ -11,8 +9,6 @@ from django.conf import settings
 from django.contrib.auth import aget_user
 from django.http import HttpRequest
 from ninja import Field, ModelSchema, NinjaAPI, Schema
-from ninja.errors import ValidationError
-from sentry_sdk import capture_exception, set_context, set_level
 
 from apps.alerts.api import router as alerts_router
 from apps.api_tokens.api import router as api_tokens_router
@@ -30,7 +26,9 @@ from apps.organizations_ext.api import router as organizations_ext_router
 from apps.performance.api import router as performance_router
 from apps.projects.api import router as projects_router
 from apps.releases.api import router as releases_router
+from apps.sourcecode.api import router as sourcecode_router
 from apps.stats.api import router as stats_router
+from apps.stripe.api import router as stripe_router
 from apps.teams.api import router as teams_router
 from apps.uptime.api import router as uptime_router
 from apps.users.api import router as users_router
@@ -43,17 +41,12 @@ from glitchtip.constants import SOCIAL_ADAPTER_MAP
 from ..schema import CamelSchema
 from .authentication import SessionAuth, TokenAuth
 from .exceptions import ThrottleException
-from .parsers import EnvelopeParser
-
-try:
-    from djstripe.settings import djstripe_settings
-except ImportError:
-    pass
+from .parsers import ORJSONParser
 
 logger = logging.getLogger(__name__)
 
 api = NinjaAPI(
-    parser=EnvelopeParser(),
+    parser=ORJSONParser(),
     title="GlitchTip API",
     urls_namespace="api",
     auth=[TokenAuth(), SessionAuth()],
@@ -72,31 +65,14 @@ api.add_router("0", organizations_ext_router)
 api.add_router("0", performance_router)
 api.add_router("0", projects_router)
 api.add_router("0", stats_router)
+api.add_router("0/stripe", stripe_router)
+api.add_router("0", sourcecode_router)
 api.add_router("0", teams_router)
 api.add_router("0", uptime_router)
 api.add_router("0", users_router)
 api.add_router("0", wizard_router)
 api.add_router("0", releases_router)
 api.add_router("embed", embed_router)
-
-if settings.BILLING_ENABLED:
-    from apps.djstripe_ext.api import router as djstripe_ext_router
-
-    api.add_router("0", djstripe_ext_router)
-
-
-# Would be better at the router level
-# https://github.com/vitalik/django-ninja/issues/442
-@api.exception_handler(ValidationError)
-def log_validation(request, exc):
-    if request.resolver_match.route == "api/<project_id>/envelope/":
-        set_level("warning")
-        set_context(
-            "incoming event", [orjson.loads(line) for line in request.body.splitlines()]
-        )
-        capture_exception(exc)
-        logger.warning(f"Validation error on {request.path}", exc_info=exc)
-    return api.create_response(request, {"detail": exc.errors}, status=422)
 
 
 @api.exception_handler(ThrottleException)
@@ -117,7 +93,7 @@ def throttled(request: HttpRequest, exc: ThrottleException):
 
 class SocialAppSchema(ModelSchema):
     scopes: list[str]
-    authorize_url: Optional[str]
+    authorize_url: str | None
 
     class Config:
         model = SocialApp
@@ -127,19 +103,19 @@ class SocialAppSchema(ModelSchema):
 class SettingsOut(CamelSchema):
     social_apps: list[SocialAppSchema]
     billing_enabled: bool
-    i_paid_for_glitchtip: bool = Field(serialization_alias="iPaidForGlitchTip")
+    i_paid_for_glitchtip: bool = Field(alias="iPaidForGlitchTip")
     enable_user_registration: bool
     enable_organization_creation: bool
-    stripe_public_key: Optional[str]
-    plausible_url: Optional[str]
-    plausible_domain: Optional[str]
-    chatwoot_website_token: Optional[str]
-    sentryDSN: Optional[str]
-    sentry_traces_sample_rate: Optional[float]
-    environment: Optional[str]
+    stripe_public_key: str | None
+    plausible_url: str | None
+    plausible_domain: str | None
+    chatwoot_website_token: str | None
+    sentryDSN: str | None
+    sentry_traces_sample_rate: float | None
+    environment: str | None
     version: str
     server_time_zone: str
-    use_new_social_callbacks: bool
+    glitchtip_instance_name: str | None
 
 
 @api.get("settings/", response=SettingsOut, by_alias=True, auth=None)
@@ -172,9 +148,7 @@ async def get_settings(request: HttpRequest):
         "i_paid_for_glitchtip": settings.I_PAID_FOR_GLITCHTIP,
         "enable_user_registration": await ais_user_registration_open(),
         "enable_organization_creation": settings.ENABLE_ORGANIZATION_CREATION,
-        "stripe_public_key": djstripe_settings.STRIPE_PUBLIC_KEY
-        if billing_enabled
-        else None,
+        "stripe_public_key": settings.STRIPE_PUBLIC_KEY,
         "plausible_url": settings.PLAUSIBLE_URL,
         "plausible_domain": settings.PLAUSIBLE_DOMAIN,
         "chatwoot_website_token": settings.CHATWOOT_WEBSITE_TOKEN,
@@ -183,14 +157,14 @@ async def get_settings(request: HttpRequest):
         "environment": settings.ENVIRONMENT,
         "version": settings.GLITCHTIP_VERSION,
         "server_time_zone": settings.TIME_ZONE,
-        "use_new_social_callbacks": settings.USE_NEW_SOCIAL_CALLBACKS,
+        "glitchtip_instance_name": settings.GLITCHTIP_INSTANCE_NAME,
     }
 
 
 class APIRootSchema(Schema):
     version: str
-    user: Optional[UserSchema]
-    auth: Optional[APITokenSchema]
+    user: UserSchema | None
+    auth: APITokenSchema | None
 
 
 @api.get("0/", auth=None, response=APIRootSchema, by_alias=True)

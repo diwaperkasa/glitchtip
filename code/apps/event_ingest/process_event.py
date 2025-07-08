@@ -1,9 +1,10 @@
+import os
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from operator import itemgetter
-from typing import Any, Optional, Union
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import ParseResult, urlparse
 
 from django.conf import settings
 from django.contrib.postgres.search import SearchVector
@@ -18,6 +19,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce, Greatest
 from django.db.utils import IntegrityError
+from django.utils import timezone
 from django_redis import get_redis_connection
 from ninja import Schema
 from user_agents import parse
@@ -39,25 +41,30 @@ from apps.issue_events.models import (
 from apps.performance.models import TransactionEvent, TransactionGroup
 from apps.projects.models import Project
 from apps.releases.models import Release
+from apps.sourcecode.models import DebugSymbolBundle
 from sentry.culprit import generate_culprit
 from sentry.eventtypes.error import ErrorEvent
 from sentry.utils.strings import truncatechars
 
 from ..shared.schema.contexts import (
     BrowserContext,
-    ContextsSchema,
+    Contexts,
     DeviceContext,
     OSContext,
 )
 from .javascript_event_processor import JavascriptEventProcessor
-from .model_functions import PipeConcat
+from .model_functions import PGAppendAndLimitTsVector
 from .schema import (
     ErrorIssueEventSchema,
+    EventException,
     IngestIssueEvent,
     InterchangeIssueEvent,
     InterchangeTransactionEvent,
+    IssueEventSchema,
+    SourceMapImage,
+    ValueEventException,
 )
-from .utils import generate_hash, transform_parameterized_message
+from .utils import generate_hash, remove_bad_chars, transform_parameterized_message
 
 
 @dataclass
@@ -69,10 +76,10 @@ class ProcessingEvent:
     metadata: dict[str, Any]
     event_data: dict[str, Any]
     event_tags: dict[str, str]
-    level: Optional[LogLevel] = None
-    issue_id: Optional[int] = None
+    level: LogLevel | None = None
+    issue_id: int | None = None
     issue_created = False
-    release_id: Optional[int] = None
+    release_id: int | None = None
 
 
 @dataclass
@@ -82,42 +89,103 @@ class IssueUpdate:
     added_count: int = 1
 
 
+def _truncate_string(s: str | None, max_len: int) -> str:
+    """Safely truncates a string if it's not None."""
+    if not s:
+        return ""
+    return s[:max_len]
+
+
+# Search settings
+MAX_SEARCH_PART_LENGTH = 250
+MAX_FILENAME_LEN = 100
+MAX_TOTAL_FILENAMES = 5
+MAX_FRAMES_PER_STACKTRACE = 3
+MAX_STACKTRACES_TO_PROCESS = 2
+MAX_VECTOR_STRING_SEGMENT_LEN = 4096  # 4KB
+
+
 def get_search_vector(event: ProcessingEvent) -> str:
-    return f"{event.title} {event.transaction}"
-
-
-Replacable = Union[str, dict, list]
-
-
-def replace(data: Replacable, match: str, repl: str) -> Replacable:
-    """A recursive replace function"""
-    if isinstance(data, dict):
-        return {k: replace(v, match, repl) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [replace(i, match, repl) for i in data]
-    elif isinstance(data, str):
-        return data.replace(match, repl)
-    return data
-
-
-def sanitize_bad_postgres_chars(data: str):
     """
-    Remove values which are not supported by the postgres string data types
+    Get string for postgres search vector. The string must be short to ensure
+    performance.
     """
-    known_bads = ["\x00"]
-    for known_bad in known_bads:
-        data = data.replace(known_bad, " ")
-    return data
+    parts: set[str] = set()
 
+    if title := event.title:
+        parts.add(_truncate_string(title, MAX_SEARCH_PART_LENGTH))
+    if transaction := event.transaction:
+        parts.add(_truncate_string(transaction, MAX_SEARCH_PART_LENGTH))
 
-def sanitize_bad_postgres_json(data: Replacable) -> Replacable:
-    """
-    Remove values which are not supported by the postgres JSONB data type
-    """
-    known_bads = ["\u0000"]
-    for known_bad in known_bads:
-        data = replace(data, known_bad, " ")
-    return data
+    payload = event.event.payload
+    if request := payload.request:
+        # Simplify URL to keep concise
+        if url := request.url:
+            try:
+                parsed_url: ParseResult = urlparse(url)
+                truncated_path = _truncate_string(
+                    parsed_url.path, MAX_SEARCH_PART_LENGTH
+                )
+                scheme_netloc = ""
+                if parsed_url.scheme and parsed_url.netloc:
+                    scheme_netloc = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                elif parsed_url.netloc:  # Fallback
+                    scheme_netloc = parsed_url.netloc
+                if scheme_netloc or truncated_path:  # Only add if we have something
+                    simplified_url = f"{scheme_netloc}{truncated_path}"
+                    parts.add(_truncate_string(simplified_url, MAX_SEARCH_PART_LENGTH))
+            except ValueError:
+                parts.add(_truncate_string(url, MAX_SEARCH_PART_LENGTH))
+
+    # Add stacktrace filenames
+    filenames_to_add: list[str] = []
+    exception_values_list: list[EventException] | None = None
+    if (
+        isinstance(payload, ErrorIssueEventSchema)
+        and payload.exception
+        and isinstance(payload.exception, ValueEventException)
+    ):
+        exception_values_list = payload.exception.values
+
+    if exception_values_list:
+        processed_stacktraces_count = 0
+        for exc_data in exception_values_list:
+            if processed_stacktraces_count >= MAX_STACKTRACES_TO_PROCESS:
+                break
+            if not exc_data.stacktrace:
+                continue
+            frames_list = exc_data.stacktrace.frames
+            frames_from_this_stacktrace = 0
+            for frame in reversed(frames_list):
+                if frames_from_this_stacktrace >= MAX_FRAMES_PER_STACKTRACE:
+                    break
+                filename_val = frame.filename
+                if frame.filename:
+                    basename = _truncate_string(
+                        os.path.basename(str(filename_val)), MAX_FILENAME_LEN
+                    )
+                    if basename:
+                        filenames_to_add.append(basename)
+                        frames_from_this_stacktrace += 1
+
+            if frames_from_this_stacktrace > 0:
+                processed_stacktraces_count += 1
+
+    for fname in filenames_to_add[:MAX_TOTAL_FILENAMES]:
+        parts.add(fname)
+
+    final_vector_string_parts = sorted([p for p in parts if p])
+    final_vector_string = " ".join(final_vector_string_parts)
+
+    if len(final_vector_string) > MAX_VECTOR_STRING_SEGMENT_LEN:
+        # Try to cut at a space to avoid breaking words mid-lexeme
+        limit_idx = final_vector_string.rfind(" ", 0, MAX_VECTOR_STRING_SEGMENT_LEN)
+        if limit_idx == -1:  # No space found, hard truncate
+            final_vector_string = final_vector_string[:MAX_VECTOR_STRING_SEGMENT_LEN]
+        else:
+            final_vector_string = final_vector_string[:limit_idx]
+
+    return remove_bad_chars(final_vector_string)
 
 
 def update_issues(processing_events: list[ProcessingEvent]):
@@ -126,34 +194,36 @@ def update_issues(processing_events: list[ProcessingEvent]):
     """
     issues_to_update: dict[int, IssueUpdate] = {}
     for processing_event in processing_events:
-        if processing_event.issue_created:
-            break
-
         issue_id = processing_event.issue_id
+        if processing_event.issue_created or not issue_id:
+            continue
+
+        vector = get_search_vector(processing_event)
         if issue_id in issues_to_update:
             issues_to_update[issue_id].added_count += 1
-            issues_to_update[
-                issue_id
-            ].search_vector += f" {get_search_vector(processing_event)}"
+            issues_to_update[issue_id].search_vector += f" {vector}"
             if issues_to_update[issue_id].last_seen < processing_event.event.received:
                 issues_to_update[issue_id].last_seen = processing_event.event.received
-        elif issue_id:
+        else:
             issues_to_update[issue_id] = IssueUpdate(
                 last_seen=processing_event.event.received,
-                search_vector=get_search_vector(processing_event),
+                search_vector=vector,
             )
 
     for issue_id, value in issues_to_update.items():
         Issue.objects.filter(id=issue_id).update(
             count=F("count") + value.added_count,
-            search_vector=PipeConcat(
-                F("search_vector"), SearchVector(Value(value.search_vector))
+            search_vector=PGAppendAndLimitTsVector(
+                F("search_vector"),
+                Value(value.search_vector),
+                Value(settings.SEARCH_MAX_LEXEMES),
+                Value("english"),
             ),
             last_seen=Greatest(F("last_seen"), value.last_seen),
         )
 
 
-def devalue(obj: Union[Schema, list]) -> Optional[Union[dict, list]]:
+def devalue(obj: Schema | list[Schema]) -> dict | list[dict] | None:
     """
     Convert Schema like {"values": []} into list or dict without unnecessary 'values'
     """
@@ -166,11 +236,11 @@ def devalue(obj: Union[Schema, list]) -> Optional[Union[dict, list]]:
     return None
 
 
-def generate_contexts(event: IngestIssueEvent) -> ContextsSchema:
+def generate_contexts(event: IngestIssueEvent) -> Contexts:
     """
     Add additional contexts if they aren't already set
     """
-    contexts = event.contexts if event.contexts else ContextsSchema(root={})
+    contexts = event.contexts if event.contexts else Contexts({})
 
     if request := event.request:
         if isinstance(request.headers, list):
@@ -178,18 +248,18 @@ def generate_contexts(event: IngestIssueEvent) -> ContextsSchema:
                 (x[1] for x in request.headers if x[0] == "User-Agent"), None
             ):
                 user_agent = parse(ua_string)
-                if "browser" not in contexts.root:
-                    contexts.root["browser"] = BrowserContext(
+                if "browser" not in contexts:
+                    contexts["browser"] = BrowserContext(
                         name=user_agent.browser.family,
                         version=user_agent.browser.version_string,
                     )
-                if "os" not in contexts.root:
-                    contexts.root["os"] = OSContext(
+                if "os" not in contexts:
+                    contexts["os"] = OSContext(
                         name=user_agent.os.family, version=user_agent.os.version_string
                     )
-                if "device" not in contexts.root:
+                if "device" not in contexts:
                     device = user_agent.device
-                    contexts.root["device"] = DeviceContext(
+                    contexts["device"] = DeviceContext(
                         family=device.family,
                         model=device.model,
                         brand=device.brand,
@@ -199,17 +269,17 @@ def generate_contexts(event: IngestIssueEvent) -> ContextsSchema:
 
 def generate_tags(event: IngestIssueEvent) -> dict[str, str]:
     """Generate key-value tags based on context and other event data"""
-    tags: dict[str, Optional[str]] = event.tags if isinstance(event.tags, dict) else {}
+    tags: dict[str, str | None] = event.tags if isinstance(event.tags, dict) else {}
 
     if contexts := event.contexts:
-        if browser := contexts.root.get("browser"):
+        if browser := contexts.get("browser"):
             if isinstance(browser, BrowserContext):
                 tags["browser.name"] = browser.name
                 tags["browser"] = f"{browser.name} {browser.version}"
-        if os := contexts.root.get("os"):
+        if os := contexts.get("os"):
             if isinstance(os, OSContext):
                 tags["os.name"] = os.name
-        if device := contexts.root.get("device"):
+        if device := contexts.get("device"):
             if isinstance(device, DeviceContext) and device.model:
                 tags["device"] = device.model
 
@@ -319,7 +389,7 @@ def get_and_create_releases(
             None,
         )
     ]
-    releases: Union[list, QuerySet] = []
+    releases: list | QuerySet = []
     if releases_to_create:
         # Create database records for any release that doesn't exist
         Release.objects.bulk_create(releases_to_create, ignore_conflicts=True)
@@ -423,6 +493,51 @@ def process_issue_events(ingest_events: list[InterchangeIssueEvent]):
     releases = get_and_create_releases(release_set, projects_with_data)
     create_environments(environment_set, projects_with_data)
 
+    sourcemap_images = [
+        image
+        for event in ingest_events
+        if isinstance(event.payload, ErrorIssueEventSchema) and event.payload.debug_meta
+        for image in event.payload.debug_meta.images
+        if isinstance(image, SourceMapImage)
+    ]
+
+    # Get each unique filename from each stacktrace frame
+    # The nesting is from the variable ways ingest data is accepted
+    # IMO it's even harder to read unnested...
+    filename_set = {
+        frame.filename.split("/")[-1]
+        for event in ingest_events
+        if isinstance(event.payload, (ErrorIssueEventSchema, IssueEventSchema))
+        and event.payload.exception
+        for exception in (
+            event.payload.exception
+            if isinstance(event.payload.exception, list)
+            else event.payload.exception.values
+        )
+        if exception.stacktrace
+        for frame in exception.stacktrace.frames
+        if frame.filename
+    }
+
+    debug_files = (
+        DebugSymbolBundle.objects.filter(
+            organization__in={event.organization_id for event in ingest_events}
+        )
+        .filter(
+            Q(
+                release__version__in=release_version_set,
+                release__projects__in=project_set,
+                file__name__in=filename_set,
+            )
+            | Q(debug_id__in={image.debug_id for image in sourcemap_images})
+        )
+        .select_related("file", "sourcemap_file", "release")
+    )
+    now = timezone.now()
+    # Update last used if older than 1 day, to minimize queries
+    if debug_files:
+        debug_files.filter(last_used__gt=now - timedelta(days=1)).update(last_used=now)
+
     # Collected/calculated event data while processing
     processing_events: list[ProcessingEvent] = []
     # Collect Q objects for bulk issue hash lookup
@@ -445,8 +560,34 @@ def process_issue_events(ingest_events: list[InterchangeIssueEvent]):
             ),
             None,
         )
-        if event.platform in ("javascript", "node") and release_id:
-            JavascriptEventProcessor(release_id, event).transform()
+        if event.platform in ("javascript", "node"):
+            event_debug_files = [
+                debug_file
+                for debug_file in debug_files
+                if debug_file.organization_id == ingest_event.organization_id
+            ]
+
+            # Assign code_file to file headers
+            if event.debug_meta:
+                for sourcemap_image in [
+                    image
+                    for image in event.debug_meta.images
+                    if isinstance(image, SourceMapImage)
+                ]:
+                    for debug_file in event_debug_files:
+                        if sourcemap_image.debug_id == debug_file.debug_id:
+                            debug_file.data["code_file"] = sourcemap_image.code_file
+
+            JavascriptEventProcessor(
+                release_id,
+                event,
+                [
+                    debug_file
+                    for debug_file in event_debug_files
+                    if debug_file.release_id == release_id
+                    or debug_file.data.get("code_file")
+                ],
+            ).transform()
         elif (
             isinstance(event, ErrorIssueEventSchema)
             and event.exception
@@ -527,7 +668,13 @@ def process_issue_events(ingest_events: list[InterchangeIssueEvent]):
         if user := event.user:
             event_data["user"] = user.dict(exclude_none=True)
         if contexts := event.contexts:
-            event_data["contexts"] = contexts.dict(exclude_none=True)
+            # Contexts may contain dict or Schema
+            event_data["contexts"] = {
+                key: value.dict(exclude_none=True)
+                if isinstance(value, Schema)
+                else value
+                for key, value in contexts.items()
+            }
 
         processing_events.append(
             ProcessingEvent(
@@ -554,8 +701,8 @@ def process_issue_events(ingest_events: list[InterchangeIssueEvent]):
         project_id = processing_event.event.project_id
         issue_defaults = {
             "type": event_type,
-            "title": sanitize_bad_postgres_chars(processing_event.title),
-            "metadata": sanitize_bad_postgres_json(processing_event.metadata),
+            "title": remove_bad_chars(processing_event.title),
+            "metadata": remove_bad_chars(processing_event.metadata),
             "first_seen": processing_event.event.received,
             "last_seen": processing_event.event.received,
         }
@@ -572,11 +719,25 @@ def process_issue_events(ingest_events: list[InterchangeIssueEvent]):
                 break
 
         if not processing_event.issue_id:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO projects_projectcounter (project_id, value)
+                    VALUES (%s, 1)
+                    ON CONFLICT (project_id) DO UPDATE
+                    SET value = projects_projectcounter.value + 1
+                    RETURNING value;
+                    """,
+                    [project_id],
+                )
+                issue_defaults["short_id"] = cursor.fetchone()[0]
             try:
                 with transaction.atomic():
                     issue = Issue.objects.create(
                         project_id=project_id,
-                        search_vector=SearchVector(Value(issue_defaults["title"])),
+                        search_vector=SearchVector(
+                            Value(get_search_vector(processing_event))
+                        ),
                         **issue_defaults,
                     )
                     new_issue_hash = IssueHash.objects.create(
@@ -606,9 +767,10 @@ def process_issue_events(ingest_events: list[InterchangeIssueEvent]):
                 else LogLevel.ERROR,
                 timestamp=processing_event.event.payload.timestamp,
                 received=processing_event.event.received,
-                title=processing_event.title,
+                title=remove_bad_chars(processing_event.title),
                 transaction=processing_event.transaction,
-                data=sanitize_bad_postgres_json(processing_event.event_data),
+                data=remove_bad_chars(processing_event.event_data),
+                hashes=[processing_event.issue_hash],
                 tags=processing_event.event_tags,
                 release_id=processing_event.release_id,
             )
@@ -618,9 +780,17 @@ def process_issue_events(ingest_events: list[InterchangeIssueEvent]):
 
     if settings.CACHE_IS_REDIS:
         # Add set of issue_ids for alerts to process later
-        get_redis_connection("default").sadd(
-            ISSUE_IDS_KEY, *{event.issue_id for event in processing_events}
-        )
+        with get_redis_connection("default") as con:
+            if (
+                con.sadd(
+                    ISSUE_IDS_KEY, *{event.issue_id for event in processing_events}
+                )
+                > 0
+            ):
+                # Set a long expiration time when a key is added
+                # We want all keys to have a long "sanity check" TTL to avoid redis out
+                # of memory errors (we can't ensure end users use all keys lru eviction)
+                con.expire(ISSUE_IDS_KEY, 3600)
 
     if issues_to_reopen:
         Issue.objects.filter(id__in=issues_to_reopen).update(
@@ -802,7 +972,7 @@ def process_transaction_events(ingest_events: list[InterchangeTransactionEvent])
 
         group, group_created = TransactionGroup.objects.get_or_create(
             project_id=ingest_event.project_id,
-            transaction=event.transaction,
+            transaction=event.transaction[:1024],  # Truncate
             op=op,
             method=method,
         )

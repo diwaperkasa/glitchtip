@@ -8,7 +8,7 @@ from freezegun import freeze_time
 from model_bakery import baker
 
 from apps.issue_events.models import EventStatus, Issue
-from apps.organizations_ext.models import OrganizationUserRole
+from apps.organizations_ext.constants import OrganizationUserRole
 from apps.projects.models import ProjectAlertStatus
 from glitchtip.test_utils.test_case import GlitchTipTestCase
 
@@ -257,7 +257,7 @@ class AlertWithUserProjectAlert(GlitchTipTestCase):
         baker.make("issue_events.IssueEvent", issue__project=self.project)
         process_event_alerts()
         self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(len(mail.outbox[0].merge_data), 2)
+        self.assertEqual(len(mail.outbox[0].merge_metadata), 2)
 
     def test_alert_enabled_subscribe_by_default(self):
         self.user.subscribe_by_default = False

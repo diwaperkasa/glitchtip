@@ -3,7 +3,7 @@ from django.urls import reverse
 from django.utils import timezone
 from model_bakery import baker
 
-from apps.organizations_ext.models import OrganizationUserRole
+from apps.organizations_ext.constants import OrganizationUserRole
 
 from ..models import Project, ProjectKey
 
@@ -52,6 +52,7 @@ class ProjectsAPITestCase(TestCase):
         res = self.client.get(self.url)
         self.assertContains(res, self.organization.name)
         data = res.json()[0]
+        self.assertIsInstance(data["id"], str)
         self.assertEqual(data["name"], self.project.name)
         self.assertTrue(data["isMember"])
         data_keys = res.json()[0].keys()

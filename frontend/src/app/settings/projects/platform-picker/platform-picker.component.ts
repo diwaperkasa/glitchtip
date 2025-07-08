@@ -2,10 +2,10 @@ import {
   Component,
   ChangeDetectionStrategy,
   forwardRef,
-  Input,
   ViewChild,
   ElementRef,
   HostListener,
+  input,
 } from "@angular/core";
 import {
   MatExpansionPanel,
@@ -25,7 +25,7 @@ import { MatButtonModule } from "@angular/material/button";
 import { MatTabsModule } from "@angular/material/tabs";
 import { MatInputModule } from "@angular/material/input";
 import { MatFormFieldModule } from "@angular/material/form-field";
-import { AsyncPipe } from "@angular/common";
+import { toSignal } from "@angular/core/rxjs-interop";
 
 @Component({
   selector: "gt-platform-picker",
@@ -39,7 +39,6 @@ import { AsyncPipe } from "@angular/common";
       multi: true,
     },
   ],
-  standalone: true,
   imports: [
     MatFormFieldModule,
     MatInputModule,
@@ -48,11 +47,10 @@ import { AsyncPipe } from "@angular/common";
     MatButtonModule,
     MatExpansionModule,
     MatListModule,
-    AsyncPipe,
   ],
 })
 export class PlatformPickerComponent implements ControlValueAccessor {
-  @Input() template: "buttons" | "dropdown" = "buttons";
+  readonly template = input<"buttons" | "dropdown">("buttons");
 
   @ViewChild("expansionPanel", { static: false })
   expansionPanel?: MatExpansionPanel;
@@ -74,30 +72,32 @@ export class PlatformPickerComponent implements ControlValueAccessor {
   filterPlatformInput = new FormControl();
 
   /** Projects that are filtered via the text field form control */
-  filteredPlatforms$ = this.filterPlatformInput.valueChanges.pipe(
-    startWith(""),
-    map((value) => {
-      if (value === "") {
-        this.setSelected(this.lastSelected);
-        return this.platforms;
-      } else {
-        this.setSelected(this.allTabIndex);
-        return this.platforms.filter((platform) =>
-          platform.id.toLowerCase().includes(value.toLowerCase()),
-        );
-      }
-    }),
+  filteredPlatforms = toSignal(
+    this.filterPlatformInput.valueChanges.pipe(
+      startWith(""),
+      map((value) => {
+        if (value === "") {
+          this.setSelected(this.lastSelected);
+          return this.platforms;
+        } else {
+          this.setSelected(this.allTabIndex);
+          return this.platforms.filter((platform) =>
+            platform.id.toLowerCase().includes(value.toLowerCase()),
+          );
+        }
+      }),
+    ),
   );
 
   selected = 0;
   lastSelected = 0;
   allTabIndex = this.categoryList.length;
-  setSelected = (index: number) => {
+  setSelected(index: number) {
     if (this.selected !== this.allTabIndex) {
       this.lastSelected = this.selected;
     }
     this.selected = index;
-  };
+  }
 
   getPlatformId(platformFromCategoryList: string) {
     const platformInfo = this.platforms.find(

@@ -1,6 +1,6 @@
-@if (productOptions$ | async; as productOptions) {
+@if (products(); as products) {
   <div class="plans mat-elevation-z1">
-    @for (product of productOptions; track product; let i = $index) {
+    @for (product of products; track product; let i = $index) {
       <mat-card>
         <mat-card-content>
           <mat-card-title>{{ product.name }}</mat-card-title>
@@ -21,16 +21,16 @@
           </ul>
           <p>
             <span class="mat-headline-4">
-              ${{ product.mainUnitPrice | number }}
+              ${{ product.defaultPrice.price | number }}
             </span>
             / month
           </p>
           <gt-loading-button
             buttonText="Select"
             [loading]="
-              (subscriptionCreationLoadingId$ | async) === product.prices[0].id
+              subscriptionCreationLoadingId() === product.defaultPrice.stripeID
             "
-            (buttonClick)="onSubmit(product.prices[0])"
+            (buttonClick)="onSubmit(product.defaultPrice)"
           ></gt-loading-button>
         </mat-card-content>
       </mat-card>
@@ -51,6 +51,6 @@
     >Questions about subscriptions? Need assistance, or a bigger plan? Contact
     us at <a href="mailto:{{ billingEmail }}">{{ billingEmail }}</a
     >.</p
-    >
-  }
-  <!-- TODO: add state for user who is not owner, since they cannot sign up for an org-->
+  >
+}
+<!-- TODO: add state for user who is not owner, since they cannot sign up for an org-->

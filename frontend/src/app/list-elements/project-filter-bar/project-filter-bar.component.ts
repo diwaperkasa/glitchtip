@@ -5,8 +5,10 @@ import {
   OnInit,
   HostListener,
   ElementRef,
+  inject,
+  signal,
+  computed,
 } from "@angular/core";
-import { CommonModule } from "@angular/common";
 import { MatButtonModule } from "@angular/material/button";
 import { MatDatepickerModule } from "@angular/material/datepicker";
 import { MatExpansionModule } from "@angular/material/expansion";
@@ -17,19 +19,18 @@ import { MatInputModule } from "@angular/material/input";
 import { MatCheckboxModule } from "@angular/material/checkbox";
 import { MatFormFieldModule } from "@angular/material/form-field";
 import { filter, map, startWith, tap } from "rxjs/operators";
-import { Observable, combineLatest, BehaviorSubject } from "rxjs";
+import { combineLatest } from "rxjs";
 import { FormControl } from "@angular/forms";
 import { OrganizationProject } from "src/app/api/projects/projects-api.interfaces";
-import { OrganizationsService } from "src/app/api/organizations/organizations.service";
 import { Router, ActivatedRoute } from "@angular/router";
 import { MatExpansionPanel } from "@angular/material/expansion";
 import { normalizeProjectParams } from "src/app/shared/shared.utils";
+import { OrganizationsService } from "src/app/api/organizations.service";
+import { toObservable, toSignal } from "@angular/core/rxjs-interop";
 
 @Component({
-  standalone: true,
   selector: "gt-project-filter-bar",
   imports: [
-    CommonModule,
     MatButtonModule,
     MatDatepickerModule,
     MatExpansionModule,
@@ -45,26 +46,34 @@ import { normalizeProjectParams } from "src/app/shared/shared.utils";
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ProjectFilterBarComponent implements OnInit {
-  orgSlug$ = this.organizationsService.activeOrganizationSlug$;
+  private organizationsService = inject(OrganizationsService);
+  private router = inject(Router);
+  private route = inject(ActivatedRoute);
+
+  orgSlug = this.organizationsService.activeOrganizationSlug;
   /** All projects available */
-  projects$ = this.organizationsService.activeOrganizationProjects$;
+  projects = this.organizationsService.activeOrganizationProjects;
+  projects$ = toObservable(
+    this.organizationsService.activeOrganizationProjects,
+  );
 
   /** Projects that are selected in this component but not yet applied */
-  selectedProjectIds = new BehaviorSubject<number[]>([]);
+  selectedProjectIds = signal<number[]>([]);
 
   /** Observable of selectedProjectIds, intended to separate concerns */
-  selectedProjectIds$ = this.selectedProjectIds.asObservable();
+  selectedProjectIds$ = toObservable(this.selectedProjectIds);
 
   /** Projects that were previously selected and applied */
   appliedProjectIds$ = this.route.queryParams.pipe(
     map((params) => {
       const normalizedParams = normalizeProjectParams(params.project);
-      this.selectedProjectIds.next(normalizedParams);
+      this.selectedProjectIds.set(normalizedParams);
       return normalizedParams;
     }),
   );
+  appliedProjectIds = toSignal(this.appliedProjectIds$);
 
-  appliedProjectIds?: number[];
+  _appliedProjectIds?: number[];
 
   /** Use selected projects to generate a string that's displayed in the UI */
   selectedProjectsString$ = combineLatest([
@@ -82,27 +91,32 @@ export class ProjectFilterBarComponent implements OnInit {
           return "All Projects";
         default:
           return ids
-            .map((id) => projects?.find((project) => id === project.id)?.name)
+            .map(
+              (id) =>
+                projects?.find((project) => id.toString() === project.id)?.name,
+            )
             .join(", ");
       }
     }),
   );
+  selectedProjectsString = toSignal(this.selectedProjectsString$);
 
-  selectedAndAppliedIdsAreEqual$ = combineLatest([
-    this.selectedProjectIds$,
-    this.appliedProjectIds$,
-  ]).pipe(
-    map(
-      ([selected, applied]) =>
-        selected.sort().join(",") === applied.sort().join(","),
-    ),
-  );
+  selectedAndAppliedIdsAreEqual = computed(() => {
+    const selected = this.selectedProjectIds();
+    const applied = this.appliedProjectIds();
+    return selected?.sort().join(",") === applied?.sort().join(",");
+  });
+
+  //** Yikes delete this please */
+  forceString(value: string | number) {
+    return String(value);
+  }
 
   /** Used to filter project names */
   filterProjectInput = new FormControl();
 
   /** Projects that are filtered via the text field form control */
-  filteredProjects$: Observable<OrganizationProject[] | null> = combineLatest([
+  filteredProjects$ = combineLatest([
     this.projects$.pipe(startWith([] as OrganizationProject[])),
     this.filterProjectInput.valueChanges.pipe(startWith("")),
   ]).pipe(
@@ -114,28 +128,27 @@ export class ProjectFilterBarComponent implements OnInit {
         : null,
     ),
   );
+  filteredProjects = toSignal(this.filteredProjects$);
 
-  someProjectsAreSelected$ = this.appliedProjectIds$.pipe(
-    map((ids) => ids.length !== 0),
+  someProjectsAreSelected = computed(
+    () => this.appliedProjectIds()?.length !== 0,
   );
 
-  singleProjectSlug$ = combineLatest([
-    this.projects$,
-    this.selectedProjectIds$,
-  ]).pipe(
-    map(([projects, ids]) => {
-      if (ids.length === 1 && projects) {
-        const matchedProject = projects.find(
-          (project) => project.id === ids[0],
-        );
-        if (matchedProject) {
-          return matchedProject.slug;
-        }
-        return false;
+  singleProjectSlug = computed(() => {
+    const projects = this.projects();
+    const ids = this.selectedProjectIds();
+
+    if (ids.length === 1 && projects) {
+      const matchedProject = projects.find(
+        (project) => project.id === ids[0].toString(),
+      );
+      if (matchedProject) {
+        return matchedProject.slug;
       }
       return false;
-    }),
-  );
+    }
+    return false;
+  });
 
   @ViewChild("expansionPanel", { static: false })
   expansionPanel?: MatExpansionPanel;
@@ -210,48 +223,48 @@ export class ProjectFilterBarComponent implements OnInit {
     });
   }
 
-  isSelected(projectId: number) {
-    return !!this.selectedProjectIds.getValue().find((id) => id === projectId);
+  isSelected(projectId: string) {
+    return !!this.selectedProjectIds().find(
+      (id) => id.toString() === projectId,
+    );
   }
 
   focusPanel() {
     this.filterInput?.nativeElement.focus();
   }
 
-  selectProjectAndClose(projectId: number) {
+  selectProjectAndClose(projectId: string) {
     this.navigate([projectId.toString()]);
-    this.selectedProjectIds.next([projectId]);
+    this.selectedProjectIds.set([parseInt(projectId)]);
     this.expansionPanel?.close();
   }
 
-  toggleProject(projectId: number) {
-    const selectedIds = [...this.selectedProjectIds.getValue()];
-    const idMatchIndex = selectedIds.indexOf(projectId);
+  toggleProject(projectId: string) {
+    const selectedIds = [...this.selectedProjectIds()];
+    const idMatchIndex = selectedIds.indexOf(parseInt(projectId));
     if (idMatchIndex > -1) {
       selectedIds.splice(idMatchIndex, 1);
     } else {
-      selectedIds.push(projectId);
+      selectedIds.push(parseInt(projectId));
     }
-    this.selectedProjectIds.next(selectedIds);
+    this.selectedProjectIds.set(selectedIds);
   }
 
   resetPanel() {
-    if (this.appliedProjectIds !== undefined) {
-      this.selectedProjectIds.next(this.appliedProjectIds);
+    if (this._appliedProjectIds !== undefined) {
+      this.selectedProjectIds.set(this._appliedProjectIds);
       this.expansionPanel?.close();
     }
   }
 
   closePanel() {
-    this.navigate(
-      this.selectedProjectIds.getValue().map((id) => id.toString()),
-    );
+    this.navigate(this.selectedProjectIds().map((id) => id.toString()));
     this.expansionPanel?.close();
   }
 
   ngOnInit() {
     this.appliedProjectIds$.subscribe((ids) => {
-      this.appliedProjectIds = ids;
+      this._appliedProjectIds = ids;
     });
 
     this.route.params
@@ -262,10 +275,4 @@ export class ProjectFilterBarComponent implements OnInit {
       )
       .subscribe();
   }
-
-  constructor(
-    private organizationsService: OrganizationsService,
-    private router: Router,
-    private route: ActivatedRoute,
-  ) {}
 }

@@ -1,17 +1,13 @@
 import { Injectable, computed } from "@angular/core";
-import { catchError, of, tap, throwError } from "rxjs";
-import {
-  AllAuthError,
-  AllAuthHttpErrorResponse,
-} from "../api/allauth/allauth.interfaces";
+import { AllAuthError } from "../api/allauth/allauth.interfaces";
 import { APIState } from "../shared/shared.interfaces";
-import { AuthenticationService } from "../api/allauth/authentication.service";
 import { handleAllAuthErrorResponse } from "../api/allauth/allauth.utils";
 import {
   messagesLookup,
   reduceParamErrors,
 } from "../api/allauth/errorMessages";
 import { StatefulService } from "../shared/stateful-service/signal-state.service";
+import { client } from "../shared/api/api";
 
 export interface ResetPasswordState extends APIState {
   errors: AllAuthError[];
@@ -24,59 +20,41 @@ const initialState: ResetPasswordState = {
   errors: [],
 };
 
-@Injectable({
-  providedIn: "root",
-})
+@Injectable()
 export class ResetPasswordService extends StatefulService<ResetPasswordState> {
   loading = computed(() => this.state().loading);
   success = computed(() => this.state().success);
+  errors = computed(() => this.state().errors);
   formErrors = computed(() =>
     messagesLookup(
-      this.state().errors.filter((err) => !err.param || err.param === "key"),
+      this.errors().filter((err) => !err.param || err.param === "key"),
     ),
   );
   fieldErrors = computed(() =>
-    reduceParamErrors(this.state().errors.filter((err) => err.param)),
+    reduceParamErrors(this.errors().filter((err) => err.param)),
   );
 
-  constructor(
-    private authenticationService: AuthenticationService,
-  ) {
+  constructor() {
     super(initialState);
   }
 
-  requestPassword(email: string) {
-    this.state.set({ ...initialState, loading: true });
-    return this.authenticationService.requestPassword(email).pipe(
-      tap(() => {
-        this.state.set({ ...initialState, success: true });
-      }),
-      catchError((err: AllAuthHttpErrorResponse) => {
-        this.setState({
-          loading: false,
-          errors: handleAllAuthErrorResponse(err),
-        });
-        if ([400, 500].includes(err.status)) {
-          return of(undefined);
-        }
-        return throwError(() => err);
-      }),
+  async requestPassword(email: string) {
+    this.setState({ loading: true });
+    const { data, error, response } = await client.POST(
+      "/_allauth/browser/v1/auth/password/request",
+      {
+        body: {
+          email,
+        },
+      },
     );
-  }
-
-  resetPassword(key: string, password: string) {
-    this.state.set({ ...initialState, loading: true });
-    return this.authenticationService.resetPassword(key, password).pipe(
-      catchError((err: AllAuthHttpErrorResponse) => {
-        this.setState({
-          loading: false,
-          errors: handleAllAuthErrorResponse(err),
-        });
-        if ([400, 500].includes(err.status)) {
-          return of(undefined);
-        }
-        return throwError(() => err);
-      }),
-    );
+    if (data) {
+      this.setState({ success: true });
+      return;
+    }
+    this.setState({
+      loading: false,
+      errors: handleAllAuthErrorResponse(error, response),
+    });
   }
 }

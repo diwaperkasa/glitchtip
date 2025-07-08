@@ -1,4 +1,9 @@
-import { Component, ChangeDetectionStrategy } from "@angular/core";
+import {
+  Component,
+  ChangeDetectionStrategy,
+  inject,
+  effect,
+} from "@angular/core";
 import {
   Validators,
   FormGroup,
@@ -9,10 +14,7 @@ import { RouterLink } from "@angular/router";
 import { MatButtonModule } from "@angular/material/button";
 import { MatInputModule } from "@angular/material/input";
 import { MatFormFieldModule } from "@angular/material/form-field";
-import { AsyncPipe } from "@angular/common";
 import { MatCardModule } from "@angular/material/card";
-import { toObservable } from "@angular/core/rxjs-interop";
-import { lastValueFrom } from "rxjs";
 import { SettingsService } from "../api/settings.service";
 import { LoadingButtonComponent } from "../shared/loading-button/loading-button.component";
 import {
@@ -22,13 +24,13 @@ import {
 import { mapFormErrors } from "../shared/forms/form.utils";
 import { FormErrorComponent } from "../shared/forms/form-error/form-error.component";
 import { StatefulComponent } from "../shared/stateful-service/signal-state.component";
+import { Autofocus } from "../shared/autofocus";
 
 @Component({
   selector: "gt-reset-password",
   templateUrl: "./reset-password.component.html",
   styleUrls: ["./reset-password.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
     MatCardModule,
     ReactiveFormsModule,
@@ -38,29 +40,32 @@ import { StatefulComponent } from "../shared/stateful-service/signal-state.compo
     LoadingButtonComponent,
     MatButtonModule,
     RouterLink,
-    AsyncPipe
-],
+    Autofocus,
+  ],
+  providers: [ResetPasswordService],
 })
 export class ResetPasswordComponent extends StatefulComponent<
   ResetPasswordState,
   ResetPasswordService
 > {
+  protected service: ResetPasswordService;
+  private settings = inject(SettingsService);
+
   success = this.service.success;
   loading = this.service.loading;
   formErrors = this.service.formErrors;
   form = new FormGroup({
     email: new FormControl("", [Validators.required, Validators.email]),
   });
-  enableUserRegistration$ = this.settings.enableUserRegistration$;
+  enableUserRegistration = this.settings.enableUserRegistration;
 
-  constructor(
-    protected service: ResetPasswordService,
-    private settings: SettingsService,
-  ) {
-    toObservable(service.fieldErrors).subscribe((fieldErrors) =>
-      mapFormErrors(fieldErrors, this.form),
-    );
+  constructor() {
+    const service = inject(ResetPasswordService);
+
+    effect(() => mapFormErrors(service.fieldErrors(), this.form));
     super(service);
+
+    this.service = service;
   }
 
   get email() {
@@ -69,7 +74,7 @@ export class ResetPasswordComponent extends StatefulComponent<
 
   onSubmit() {
     if (this.form.valid && this.form.value.email) {
-      lastValueFrom(this.service.requestPassword(this.form.value.email));
+      this.service.requestPassword(this.form.value.email);
     }
   }
 

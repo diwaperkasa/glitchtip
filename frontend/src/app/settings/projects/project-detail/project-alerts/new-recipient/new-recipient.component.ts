@@ -1,5 +1,14 @@
-import { Component, OnInit, ChangeDetectionStrategy } from "@angular/core";
-import { MatDialogRef, MatDialogModule } from "@angular/material/dialog";
+import {
+  Component,
+  OnInit,
+  ChangeDetectionStrategy,
+  inject,
+} from "@angular/core";
+import {
+  MatDialogRef,
+  MatDialogModule,
+  MAT_DIALOG_DATA,
+} from "@angular/material/dialog";
 import {
   FormGroup,
   FormControl,
@@ -7,24 +16,19 @@ import {
   ReactiveFormsModule,
 } from "@angular/forms";
 import { RecipientType } from "src/app/api/projects/project-alerts/project-alerts.interface";
-import { ProjectAlertsService } from "../project-alerts.service";
 import { urlRegex } from "src/app/shared/validators";
 import { MatButtonModule } from "@angular/material/button";
 import { LoadingButtonComponent } from "../../../../../shared/loading-button/loading-button.component";
 import { MatInputModule } from "@angular/material/input";
 import { MatOptionModule } from "@angular/material/core";
-import { CommonModule } from "@angular/common";
 import { MatSelectModule } from "@angular/material/select";
 import { MatFormFieldModule } from "@angular/material/form-field";
 
 @Component({
-  selector: "gt-new-recipient",
   templateUrl: "./new-recipient.component.html",
   styleUrls: ["./new-recipient.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
-    CommonModule,
     MatDialogModule,
     ReactiveFormsModule,
     MatFormFieldModule,
@@ -36,9 +40,8 @@ import { MatFormFieldModule } from "@angular/material/form-field";
   ],
 })
 export class NewRecipientComponent implements OnInit {
-  recipientDialogOpen$ = this.alertsService.recipientDialogOpen$;
-  emailSelected$ = this.alertsService.emailSelected$;
-  recipientError$ = this.alertsService.recipientError$;
+  dialogRef = inject<MatDialogRef<NewRecipientComponent>>(MatDialogRef);
+  data = inject(MAT_DIALOG_DATA);
 
   recipientOptions = [
     { viewValue: "Email", value: "email" },
@@ -54,15 +57,6 @@ export class NewRecipientComponent implements OnInit {
 
   recipientType = this.recipientForm.get("recipientType") as FormControl;
   url = this.recipientForm.get("url") as FormControl;
-
-  constructor(
-    public dialogRef: MatDialogRef<NewRecipientComponent>,
-    private alertsService: ProjectAlertsService,
-  ) {
-    this.recipientDialogOpen$.subscribe(
-      (resp) => !resp && this.dialogRef.close(),
-    );
-  }
 
   ngOnInit(): void {
     // Dynamically set "url" validators
@@ -86,10 +80,6 @@ export class NewRecipientComponent implements OnInit {
     });
   }
 
-  closeDialog() {
-    this.alertsService.closeRecipientDialog();
-  }
-
   selectOptions(
     recipientOptions: { viewValue: string; value: string }[],
     hideEmailOption?: boolean | null,
@@ -101,7 +91,7 @@ export class NewRecipientComponent implements OnInit {
 
   onSubmit() {
     if (this.recipientForm.valid) {
-      this.alertsService.addAlertRecipient(this.recipientForm.value as any);
+      this.dialogRef.close(this.recipientForm.value);
     }
   }
 }

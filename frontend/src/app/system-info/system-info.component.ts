@@ -1,5 +1,4 @@
-import { ChangeDetectionStrategy, Component } from "@angular/core";
-import { AsyncPipe, KeyValuePipe } from "@angular/common";
+import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
 import {
   MatCard,
   MatCardContent,
@@ -9,50 +8,30 @@ import {
 import { SettingsService } from "../api/settings.service";
 import { MatDivider } from "@angular/material/divider";
 import { MatHint } from "@angular/material/form-field";
-import { map, combineLatest } from "rxjs";
-import { EntryDataComponent } from "../shared/entry-data/entry-data.component";
+import { MarkdownComponent, provideMarkdown } from "ngx-markdown";
 
 @Component({
   selector: "gt-system-info",
-  standalone: true,
   imports: [
-    AsyncPipe,
     MatCard,
     MatCardHeader,
     MatCardTitle,
     MatCardContent,
     MatDivider,
     MatHint,
-    EntryDataComponent,
-    KeyValuePipe
-],
+    MarkdownComponent,
+  ],
+  providers: [provideMarkdown()],
   templateUrl: "./system-info.component.html",
   styleUrls: ["./system-info.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class SystemInfoComponent {
-  backendConfiguration$ = combineLatest([
-    this.settingsService.enableOrganizationCreation$,
-    this.settingsService.enableUserRegistration$,
-    this.settingsService.serverTimeZone$,
-    this.settingsService.version$,
-  ]).pipe(
-    map(
-      ([
-        enableOrganizationCreation,
-        enableUserRegistration,
-        serverTimeZone,
-        version,
-      ]) => {
-        return {
-          enableOrganizationCreation,
-          enableUserRegistration,
-          serverTimeZone,
-          version,
-        };
-      },
-    ),
-  );
+  private settingsService = inject(SettingsService);
 
-  constructor(private settingsService: SettingsService) {}
+  enableOrganizationCreate = this.settingsService.enableOrganizationCreation;
+  enableUserRegistration = this.settingsService.enableUserRegistration;
+  serverTimeZone = this.settingsService.serverTimeZone;
+  version = this.settingsService.version;
+  instanceName = this.settingsService.instanceName;
 }

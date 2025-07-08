@@ -2,13 +2,16 @@ import os
 import shutil
 import uuid
 
+from django.test import override_settings
 from django.urls import reverse
 from model_bakery import baker
 
+from apps.event_ingest.tests.utils import generate_event
 from apps.issue_events.constants import EventStatus, LogLevel
 from apps.issue_events.models import Issue, IssueEvent, IssueHash
 from apps.projects.models import IssueEventProjectHourlyStatistic
 from apps.releases.models import Release
+from glitchtip.utils import get_random_string
 
 from ..process_event import process_issue_events
 from ..schema import (
@@ -38,11 +41,16 @@ class IssueEventIngestTestCase(EventIngestTestCase):
     """
 
     def test_two_events(self):
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(9):
             self.process_events([{}, {}])
         self.assertEqual(Issue.objects.count(), 1)
         self.assertEqual(IssueHash.objects.count(), 1)
         self.assertEqual(IssueEvent.objects.count(), 2)
+        self.assertEqual(
+            IssueHash.objects.first().value.hex,
+            IssueEvent.objects.first().hashes[0],
+            "Hash should be stored on event",
+        )
         self.assertTrue(
             IssueEventProjectHourlyStatistic.objects.filter(
                 count=2, project=self.project
@@ -68,6 +76,8 @@ class IssueEventIngestTestCase(EventIngestTestCase):
                 count=2, project=self.project
             ).exists()
         )
+        self.assertEqual(Issue.objects.first().short_id, 1)
+        self.assertEqual(Issue.objects.last().short_id, 2)
 
     def test_transaction_truncation(self):
         long_string = "x" * 201
@@ -117,7 +127,7 @@ class IssueEventIngestTestCase(EventIngestTestCase):
             "release": "newr",
             "environment": "newe",
         }
-        with self.assertNumQueries(13):
+        with self.assertNumQueries(15):
             self.process_events([event1, {}])
         self.process_events([event1, event2, {}])
         self.assertEqual(self.project.releases.count(), 3)
@@ -142,7 +152,7 @@ class IssueEventIngestTestCase(EventIngestTestCase):
                 }
             ],
             "event_id": uuid.uuid4(),
-            "fingerprint": ["foo"],
+            "fingerprint": ["foo", None, "bar"],
         }
         self.process_events(data)
 
@@ -330,16 +340,13 @@ class IssueEventIngestTestCase(EventIngestTestCase):
             "files.FileBlob", blob="uploads/file_blobs/bundle.js.map"
         )
         baker.make(
-            "releases.ReleaseFile",
+            "sourcecode.DebugSymbolBundle",
+            organization=self.organization,
             release=release,
             file__name="bundle.js",
             file__blob=blob_bundle,
-        )
-        baker.make(
-            "releases.ReleaseFile",
-            release=release,
-            file__name="bundle.js.map",
-            file__blob=blob_bundle_map,
+            sourcemap_file__name="bundle.js.map",
+            sourcemap_file__blob=blob_bundle_map,
         )
         try:
             os.mkdir("./uploads/file_blobs")
@@ -365,12 +372,20 @@ class IssueEventIngestTestCase(EventIngestTestCase):
         )
         # Show that pre and post context is included
         self.assertEqual(
-            len(IssueEvent.objects.first().data["exception"][0]["stacktrace"]["frames"][0]["pre_context"]),
-            5
+            len(
+                IssueEvent.objects.first().data["exception"][0]["stacktrace"]["frames"][
+                    0
+                ]["pre_context"]
+            ),
+            5,
         )
         self.assertEqual(
-            len(IssueEvent.objects.first().data["exception"][0]["stacktrace"]["frames"][0]["post_context"]),
-            1
+            len(
+                IssueEvent.objects.first().data["exception"][0]["stacktrace"]["frames"][
+                    0
+                ]["post_context"]
+            ),
+            1,
         )
 
         self.assertTrue(IssueEvent.objects.filter(release=release).exists())
@@ -382,6 +397,41 @@ class IssueEventIngestTestCase(EventIngestTestCase):
         issue = Issue.objects.filter(search_vector=word).first()
         self.assertTrue(issue)
         self.assertEqual(len(issue.search_vector.split(" ")), 1)
+
+    @override_settings(SEARCH_MAX_LEXEMES=3)
+    def test_search_vector_truncate(self):
+        """Trucate both max lexemes and size of each lexeme"""
+        events = [
+            {
+                "message": get_random_string(),
+                "fingerprint": ["79054025255fb1a26e4bc422aef54eb4"],
+            }
+            for _ in range(4)
+        ]
+        self.process_events(events)
+        issue = Issue.objects.get()
+        self.assertEqual(
+            len(issue.search_vector.split(" ")), 3, "truncate number of lexemes"
+        )
+
+    def test_search_vector_content(self):
+        event_data = generate_event()
+        event = InterchangeIssueEvent(
+            event_id=event_data["event_id"],
+            organization_id=self.organization.id,
+            project_id=self.project.id,
+            payload=ErrorIssueEventSchema(**event_data),
+        )
+        process_issue_events([event])
+        file_name = event_data["exception"]["values"][0]["stacktrace"]["frames"][0][
+            "filename"
+        ]
+        issue_event = IssueEvent.objects.get(pk=event.event_id)
+        self.assertIn(file_name, issue_event.issue.search_vector)
+        self.assertIn(
+            event_data["request"]["url"].split("//")[-1],
+            issue_event.issue.search_vector,
+        )
 
     def test_null_character_event(self):
         """
@@ -403,13 +453,15 @@ class IssueEventIngestTestCase(EventIngestTestCase):
         )
         data = SecuritySchema(**payload)
         event = CSPIssueEventSchema(csp=data.csp_report.dict(by_alias=True))
-        process_issue_events([
-            InterchangeIssueEvent(
-                project_id=self.project.id,
-                organization_id=self.organization.id,
-                payload=event.dict(by_alias=True),
-            )
-        ])
+        process_issue_events(
+            [
+                InterchangeIssueEvent(
+                    project_id=self.project.id,
+                    organization_id=self.organization.id,
+                    payload=event.dict(by_alias=True),
+                )
+            ]
+        )
         issue = Issue.objects.get()
         url = reverse("api:get_latest_issue_event", kwargs={"issue_id": issue.id})
         res = self.client.get(url)
@@ -864,7 +916,9 @@ class SentryCompatTestCase(EventIngestTestCase):
         sentry_exception = next(filter(is_exception, sentry_data["entries"]), None)
         self.assertEqual(
             res_exception["data"]["values"][0]["stacktrace"]["frames"][-1]["context"],
-            sentry_exception["data"]["values"][0]["stacktrace"]["frames"][-1]["context"],
+            sentry_exception["data"]["values"][0]["stacktrace"]["frames"][-1][
+                "context"
+            ],
         )
 
         self.assertCompareData(event_json, sentry_json, ["environment"])
@@ -950,3 +1004,27 @@ class SentryCompatTestCase(EventIngestTestCase):
             sentry_json["exception"]["values"][0],
             ["type", "values", "exception", "abs_path"],
         )
+
+    def test_bad_message_format(self):
+        """%d will not accept a string, it should fallback to not formatting"""
+        event = generate_event()
+        event["message"] = {"message": "lol %d", "params": ["a"]}
+        result = self.submit_event(event)
+        self.assertEqual(result.data["logentry"]["formatted"], "")
+
+        event = generate_event()
+        event["message"] = {"message": "lol %d", "params": [1]}
+        result = self.submit_event(event)
+        self.assertEqual(result.data["logentry"]["formatted"], "lol 1")
+
+    def test_invalid_user(self):
+        """User interface may contain some arbitrary data"""
+        event = generate_event()
+        event["user"] = {"username": {"a": "b"}}
+        result = self.submit_event(event)
+        self.assertEqual(result.data.get("user"), None)
+
+        event = generate_event()
+        event["user"] = {"username": "user", "subscription": {"isActive": True}}
+        result = self.submit_event(event)
+        self.assertEqual(result.data["user"]["username"], "user")

@@ -1,23 +1,29 @@
-import { Component, OnInit, ChangeDetectionStrategy } from "@angular/core";
-import { ActivatedRoute, RouterLink } from "@angular/router";
-import { map, filter } from "rxjs/operators";
-import { OrganizationsService } from "src/app/api/organizations/organizations.service";
-import { MembersService } from "src/app/api/organizations/members.service";
-import { Member, MemberSelector } from "src/app/api/organizations/organizations.interface";
+import {
+  Component,
+  OnInit,
+  ChangeDetectionStrategy,
+  inject,
+  input,
+} from "@angular/core";
+import { RouterLink } from "@angular/router";
+import { OrganizationDetailService } from "src/app/api/organizations/organization-detail.service";
+import { MembersService } from "src/app/settings/members/members.service";
 import { MatTooltipModule } from "@angular/material/tooltip";
 import { LoadingButtonComponent } from "../../shared/loading-button/loading-button.component";
 import { MatChipsModule } from "@angular/material/chips";
-import { AsyncPipe } from "@angular/common";
 import { MatDividerModule } from "@angular/material/divider";
 import { MatCardModule } from "@angular/material/card";
 import { MatButtonModule } from "@angular/material/button";
+import { OrganizationsService } from "src/app/api/organizations.service";
+import { components } from "src/app/api/api-schema";
+
+type Member = components["schemas"]["OrganizationUserSchema"];
 
 @Component({
   selector: "gt-members",
   templateUrl: "./members.component.html",
   styleUrls: ["./members.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
     MatButtonModule,
     RouterLink,
@@ -26,41 +32,32 @@ import { MatButtonModule } from "@angular/material/button";
     MatChipsModule,
     LoadingButtonComponent,
     MatTooltipModule,
-    AsyncPipe
-],
+  ],
+  providers: [MembersService],
 })
 export class MembersComponent implements OnInit {
-  activeOrganizationDetail$ =
-    this.organizationsService.activeOrganizationDetail$;
-  members$ = this.membersService.members$;
+  private organizationsService = inject(OrganizationsService);
+  private organizationDetailService = inject(OrganizationDetailService);
+  private membersService = inject(MembersService);
 
-  constructor(
-    private organizationsService: OrganizationsService,
-    private membersService: MembersService,
-    private route: ActivatedRoute
-  ) {}
+  orgSlug = input.required<string>({ alias: "org-slug" });
+  activeOrganizationDetail = this.organizationsService.activeOrganization;
+  members = this.membersService.members;
 
   ngOnInit(): void {
-    this.route.params
-      .pipe(
-        map((params) => params["org-slug"] as string),
-        filter((slug) => !!slug)
-      )
-      .subscribe((slug) => {
-        this.organizationsService.retrieveOrganizationMembers(slug).toPromise();
-      });
+    this.organizationDetailService.retrieveOrganizationMembers(this.orgSlug());
   }
 
   resendInvite(member: Member) {
     this.membersService.resendInvite(member);
   }
 
-  removeMember(member: MemberSelector) {
+  removeMember(member: any) {
     const message = member.isMe
       ? `Are you sure you'd like to leave this organization?`
       : `Are you sure you want to remove ${member.email} from this organization?`;
     if (window.confirm(message)) {
-      this.membersService.removeMember(member);
+      this.membersService.removeMember(member as any, member.isMe);
     }
   }
 }

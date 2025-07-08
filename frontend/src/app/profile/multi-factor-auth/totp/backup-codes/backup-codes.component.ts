@@ -1,4 +1,9 @@
-import { Component, ChangeDetectionStrategy } from "@angular/core";
+import {
+  Component,
+  ChangeDetectionStrategy,
+  inject,
+  effect,
+} from "@angular/core";
 import {
   FormControl,
   FormGroup,
@@ -12,15 +17,12 @@ import { MatSnackBar } from "@angular/material/snack-bar";
 
 import { MultiFactorAuthService } from "../../multi-factor-auth.service";
 import { FormErrorComponent } from "../../../../shared/forms/form-error/form-error.component";
-import { lastValueFrom } from "rxjs";
-import { toObservable } from "@angular/core/rxjs-interop";
 
 @Component({
   selector: "gt-backup-codes",
   templateUrl: "./backup-codes.component.html",
   styleUrls: ["./backup-codes.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
     MatButtonModule,
     ReactiveFormsModule,
@@ -30,6 +32,9 @@ import { toObservable } from "@angular/core/rxjs-interop";
   ],
 })
 export class BackupCodesComponent {
+  private service = inject(MultiFactorAuthService);
+  private snackBar = inject(MatSnackBar);
+
   TOTPAuthenticator = this.service.TOTPAuthenticator;
   error = this.service.error;
   copiedCodes = this.service.copiedCodes;
@@ -42,13 +47,8 @@ export class BackupCodesComponent {
     ]),
   });
 
-  constructor(
-    private service: MultiFactorAuthService,
-    private snackBar: MatSnackBar,
-  ) {
-    toObservable(this.error).subscribe((error) =>
-      this.backupCode?.setErrors({ serverError: [error] }),
-    );
+  constructor() {
+    effect(() => this.backupCode?.setErrors({ serverError: [this.error()] }));
   }
 
   get backupCode() {
@@ -56,7 +56,7 @@ export class BackupCodesComponent {
   }
 
   startRegenCodes() {
-    lastValueFrom(this.service.regenerateRecoveryCodes());
+    this.service.regenerateRecoveryCodes();
   }
 
   copyCodes() {
@@ -76,7 +76,7 @@ export class BackupCodesComponent {
   verifyBackupCode() {
     const code = this.backupCodeForm.get("backupCode")?.value;
     if (this.backupCodeForm.valid && code) {
-      lastValueFrom(this.service.setRecoveryCodes(code));
+      this.service.setRecoveryCodes(code);
     }
   }
 

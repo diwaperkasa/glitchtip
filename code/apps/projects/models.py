@@ -1,4 +1,3 @@
-import random
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -11,7 +10,7 @@ from django.utils.text import slugify
 from django_extensions.db.fields import AutoSlugField
 
 from apps.issue_events.models import Issue, IssueEvent
-from apps.observability.metrics import clear_metrics_cache
+from apps.observability.utils import clear_metrics_cache
 from glitchtip.base_models import AggregationModel, CreatedModel, SoftDeleteModel
 
 
@@ -103,11 +102,6 @@ class Project(CreatedModel, SoftDeleteModel):
         super().force_delete(*args, **kwargs)
         clear_metrics_cache()
 
-    @property
-    def should_scrub_ip_addresses(self):
-        """Organization overrides project setting"""
-        return self.scrub_ip_addresses or self.organization.scrub_ip_addresses
-
     def slugify_function(self, content):
         """
         Make the slug the project name. Validate uniqueness with both name and org id.
@@ -121,13 +115,6 @@ class Project(CreatedModel, SoftDeleteModel):
             if slug in reserved_words:
                 slug += "-1"
         return slug
-
-    @property
-    def is_accepting_events(self):
-        """Is the project in its limits for event creation"""
-        if self.event_throttle_rate == 0:
-            return True
-        return random.randint(0, 100) > self.event_throttle_rate
 
 
 class ProjectCounter(models.Model):

@@ -1,4 +1,9 @@
-import { Component, ChangeDetectionStrategy, Input } from "@angular/core";
+import {
+  Component,
+  ChangeDetectionStrategy,
+  input,
+  inject,
+} from "@angular/core";
 import { IssueDetailService } from "../../issue-detail.service";
 import { isStacktrace } from "src/app/issues/utils";
 import { RawStacktraceComponent } from "./raw-stacktrace/raw-stacktrace.component";
@@ -8,14 +13,12 @@ import { MatExpansionModule } from "@angular/material/expansion";
 import { MatChipsModule } from "@angular/material/chips";
 import { MatButtonToggleModule } from "@angular/material/button-toggle";
 import { MatButtonModule } from "@angular/material/button";
-import { AsyncPipe } from "@angular/common";
 
 @Component({
   selector: "gt-entry-exception",
   templateUrl: "./entry-exception.component.html",
   styleUrls: ["./entry-exception.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
     MatButtonModule,
     MatButtonToggleModule,
@@ -24,16 +27,15 @@ import { AsyncPipe } from "@angular/common";
     FrameTitleComponent,
     FrameExpandedComponent,
     RawStacktraceComponent,
-    AsyncPipe
-],
+  ],
 })
 export class EntryExceptionComponent {
-  @Input() eventTitle: string | undefined;
-  @Input() eventPlatform: string | undefined;
-  eventEntryException$ = this.issueService.eventEntryException$;
-  isReversed$ = this.issueService.isReversed$;
+  private issueService = inject(IssueDetailService);
 
-  constructor(private issueService: IssueDetailService) {}
+  readonly eventTitle = input<string>();
+  readonly eventPlatform = input<string>();
+  eventEntryException = this.issueService.eventEntryException;
+  isReversed = this.issueService.isReversed;
 
   checkStacktraceInterface = isStacktrace;
 

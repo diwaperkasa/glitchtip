@@ -1,7 +1,7 @@
 from django.urls import reverse
 from model_bakery import baker
 
-from apps.organizations_ext.models import OrganizationUserRole
+from apps.organizations_ext.constants import OrganizationUserRole
 from glitchtip.test_utils.test_case import APIPermissionTestCase
 
 
@@ -106,14 +106,40 @@ class OrganizationMemberAPIPermissionTests(APIPermissionTestCase):
         self.assertDeleteReqStatusCode(self.detail_url, 204)
 
     def test_user_destroy(self):
+        another_user = baker.make("users.user")
+        another_org_user = self.organization.add_user(another_user)
+        url = reverse(
+            "api:get_organization_member",
+            args=[self.organization.slug, another_org_user.pk],
+        )
         self.set_client_credentials(None)
         self.client.force_login(self.user)
         self.set_user_role(OrganizationUserRole.MEMBER)
-        self.assertDeleteReqStatusCode(self.detail_url, 403)
+        self.assertDeleteReqStatusCode(url, 403)
         self.set_user_role(OrganizationUserRole.OWNER)
-        self.assertDeleteReqStatusCode(self.detail_url, 204)
+        self.assertDeleteReqStatusCode(url, 204)
+
+    def test_invite_destroy(self):
+        invitee = baker.make(
+            "organizations_ext.OrganizationUser", organization=self.organization
+        )
+        url = reverse(
+            "api:get_organization_member",
+            args=[self.organization.slug, invitee.pk],
+        )
+        self.set_client_credentials(None)
+        self.client.force_login(self.user)
+        self.set_user_role(OrganizationUserRole.MEMBER)
+        self.assertDeleteReqStatusCode(url, 403)
+        self.set_user_role(OrganizationUserRole.OWNER)
+        self.assertDeleteReqStatusCode(url, 204)
 
     def test_update(self):
+        baker.make(
+            "organizations_ext.OrganizationUser",
+            role=OrganizationUserRole.OWNER,
+            organization=self.organization,
+        )  # Ensure alternative owner exists
         self.auth_token.add_permission("member:read")
         data = {"email": "lol@example.com", "orgRole": "member"}
         self.assertPutReqStatusCode(self.detail_url, data, 403)

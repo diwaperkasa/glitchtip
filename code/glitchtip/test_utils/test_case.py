@@ -4,7 +4,8 @@ from typing import Optional
 from django.test import TestCase
 from model_bakery import baker
 
-from apps.organizations_ext.models import Organization, OrganizationUserRole
+from apps.organizations_ext.constants import OrganizationUserRole
+from apps.organizations_ext.models import Organization
 
 
 class GlitchTestCase(TestCase):
@@ -43,7 +44,6 @@ class GlitchTestCase(TestCase):
         cls.org_user = cls.organization.add_user(cls.user, OrganizationUserRole.ADMIN)
         cls.team = baker.make("teams.Team", organization=cls.organization)
         cls.team.members.add(cls.org_user)
-        cls.project = baker.make("projects.Project", organization=cls.organization)
         cls.project.teams.add(cls.team)
 
 

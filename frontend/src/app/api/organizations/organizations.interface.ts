@@ -8,13 +8,14 @@ export interface OrganizationNew {
 }
 
 export interface Organization extends OrganizationNew {
-  id: number;
+  id: string;
   dateCreated: string;
   status: OrgStatus;
   avatar: Avatar;
   isEarlyAdopter: boolean;
   require2FA: boolean;
   isAcceptingEvents: boolean;
+  eventThrottleRate: number;
   slug: string;
 }
 
@@ -86,16 +87,20 @@ export interface OrgMemberIn extends OrgMemberUpdate {
 }
 
 export interface OrganizationLoading {
+  updateOrganization: boolean;
+  deleteOrganization: boolean;
   addTeamMember: string;
   removeTeamMember: string;
-  addOrganizationMember: boolean;
+  addOrganizationMembers: boolean;
 }
 
 export interface OrganizationErrors {
   createOrganization: string;
+  updateOrganization: string;
+  deleteOrganization: string;
   addTeamMember: string;
   removeTeamMember: string;
-  addOrganizationMember: string;
+  addOrganizationMembers: string;
 }
 
 export interface Environment {

@@ -9,17 +9,6 @@ import django_extensions.db.fields
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("uptime", "0001_initial"),
-        ("uptime", "0002_auto_20210822_1617"),
-        ("uptime", "0003_auto_20211127_0159"),
-        ("uptime", "0004_alter_monitor_expected_status"),
-        ("uptime", "0005_monitor_timeout"),
-        ("uptime", "0006_alter_monitorcheck_options_and_more"),
-        ("uptime", "0007_monitorcheck_is_change_and_more"),
-        ("uptime", "0008_statuspage_statuspage_unique_organization_slug"),
-    ]
-
     initial = True
 
     dependencies = [

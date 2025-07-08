@@ -1,12 +1,14 @@
 import json
 
 from django.core import mail
+from django.core.cache import cache
 from django.db import transaction
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from model_bakery import baker
 
-from ..models import OrganizationUser, OrganizationUserRole
+from ..constants import OrganizationUserRole
+from ..models import OrganizationUser
 
 
 class OrganizationUsersTestCase(TestCase):
@@ -17,9 +19,7 @@ class OrganizationUsersTestCase(TestCase):
             "organizations_ext.Organization",
             name="<a>No</a><script>HtmlInOrgName</script>",
         )
-        cls.org_user = cls.organization.add_user(
-            cls.user, role=OrganizationUserRole.MANAGER
-        )
+        cls.org_user = cls.organization.add_user(cls.user)
         baker.make("organizations_ext.OrganizationUser", user=cls.user, role=5)
         cls.members_url = reverse(
             "api:list_organization_members", args=[cls.organization.slug]
@@ -143,6 +143,47 @@ class OrganizationUsersTestCase(TestCase):
             ).exists()
         )
 
+
+    @override_settings(
+        EMAIL_INVITE_THROTTLE_COUNT=1,
+        EMAIL_INVITE_REQUIRE_VERIFICATION=True,
+    )
+    def test_organization_users_create_throttle(self):
+        cache_key = f"email_invite_throttle_{self.user.id}"
+        cache.delete(cache_key)
+        data = {
+            "email": "new@example.com",
+            "orgRole": OrganizationUserRole.MANAGER.label.lower(),
+            "teamRoles": [],
+        }
+        res = self.client.post(self.members_url, data, content_type="application/json")
+        self.assertEqual(res.status_code, 403)
+
+        self.user.emailaddress_set.create(email="new@example.com", verified=True)
+
+        res = self.client.post(self.members_url, data, content_type="application/json")
+        self.assertEqual(res.status_code, 201)
+        res = self.client.post(self.members_url, data, content_type="application/json")
+        self.assertEqual(res.status_code, 429)
+
+        def test_org_name_url_chars_stripped(self):
+            self.organization.name = "visit https://evilspam.com"
+            self.organization.save()
+
+            data = {
+                "email": "new@example.com",
+                "orgRole": OrganizationUserRole.MANAGER.label.lower(),
+                "teamRoles": [],
+            }
+            self.client.post(self.members_url, data, content_type="application/json")
+            body = mail.outbox[0].body
+            html_content = mail.outbox[0].alternatives[0][0]
+            self.assertFalse("visit https://evilspam.com" in body)
+            self.assertTrue("visit sevilspam" in body)
+            self.assertFalse("visit https://evilspam.com" in html_content)
+            self.assertTrue("visit sevilspam" in html_content)
+
+
     def test_closed_user_registration(self):
         data = {
             "email": "new@example.com",
@@ -230,6 +271,38 @@ class OrganizationUsersTestCase(TestCase):
         res = self.client.post(self.members_url, data, content_type="application/json")
         self.assertEqual(res.status_code, 403)
 
+    def test_organization_users_create_without_org_specific_permissions(self):
+        """
+        Ensure queryset with role_required checks the correct organization user's role.
+        """
+
+        organization_2 = baker.make("organizations_ext.Organization")
+        org_2_user = organization_2.add_user(self.user)
+        org_2_user.role = OrganizationUserRole.ADMIN
+        org_2_user.save()
+
+        data = {
+            "email": "new@example.com",
+            "orgRole": OrganizationUserRole.MANAGER.label.lower(),
+            "teamRoles": [],
+        }
+        url = reverse("api:list_organization_members", args=[organization_2.slug])
+        res = self.client.post(url, data, content_type="application/json")
+        self.assertEqual(res.status_code, 403)
+
+        org_2_user.role = OrganizationUserRole.MANAGER
+        org_2_user.save()
+
+        res = self.client.post(url, data, content_type="application/json")
+        self.assertTrue(
+            OrganizationUser.objects.filter(
+                organization=organization_2,
+                email=data["email"],
+                user=None,
+                role=OrganizationUserRole.MANAGER,
+            ).exists()
+        )
+
     def test_organization_users_reinvite(self):
         other_user = baker.make("users.user")
         baker.make(
@@ -262,6 +335,13 @@ class OrganizationUsersTestCase(TestCase):
                 organization=self.organization, role=new_role, user=other_user
             ).exists()
         )
+
+    def test_organization_users_update_ownerless_org(self):
+        """Do not allow ownerless organizations"""
+        url = self.get_org_member_detail_url(self.organization.slug, self.org_user.pk)
+        data = {"orgRole": OrganizationUserRole.MEMBER.label.lower(), "teamRoles": []}
+        res = self.client.put(url, data, content_type="application/json")
+        self.assertEqual(res.status_code, 422)
 
     def test_organization_users_update_without_permissions(self):
         self.org_user.role = OrganizationUserRole.ADMIN
@@ -320,6 +400,18 @@ class OrganizationUsersTestCase(TestCase):
         res = self.client.delete(url)
         self.assertEqual(res.status_code, 403)
         self.assertEqual(other_user.organizations_ext_organizationuser.count(), 1)
+
+    def test_organization_users_delete_self(self):
+        other_user = baker.make("users.user")
+        other_org_user = self.organization.add_user(other_user)
+
+        self.client.force_login(other_user)
+
+        url = self.get_org_member_detail_url(self.organization.slug, other_org_user.pk)
+
+        res = self.client.delete(url)
+        self.assertEqual(res.status_code, 204)
+        self.assertEqual(other_user.organizations_ext_organizationuser.count(), 0)
 
     def test_organization_members_set_owner(self):
         other_user = baker.make("users.user")

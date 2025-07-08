@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, Input } from "@angular/core";
+import { Component, ChangeDetectionStrategy, input } from "@angular/core";
 
 @Component({
   standalone: true,
@@ -8,12 +8,11 @@ import { Component, ChangeDetectionStrategy, Input } from "@angular/core";
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class EntryDataComponent {
-  @Input() key?: string;
-  @Input() value: unknown;
+  readonly key = input<any>();
+  readonly value = input<any>();
 
   get displayValue() {
-    return typeof this.value === "object"
-      ? JSON.stringify(this.value)
-      : this.value;
+    const value = this.value();
+    return typeof value === "object" ? JSON.stringify(value) : value;
   }
 }

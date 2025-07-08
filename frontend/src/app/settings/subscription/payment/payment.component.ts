@@ -1,61 +1,60 @@
-import { Component, ChangeDetectionStrategy, OnInit } from "@angular/core";
-import { lastValueFrom } from "rxjs";
-import { filter, first, tap } from "rxjs/operators";
+import {
+  Component,
+  ChangeDetectionStrategy,
+  inject,
+  OnInit,
+} from "@angular/core";
+import { StatefulComponent } from "src/app/shared/stateful-service/signal-state.component";
 import { environment } from "../../../../environments/environment";
-import { BasePrice } from "src/app/api/subscriptions/subscriptions.interfaces";
-import { OrganizationsService } from "src/app/api/organizations/organizations.service";
-import { SubscriptionsService } from "src/app/api/subscriptions/subscriptions.service";
 import { EventInfoComponent } from "../../../shared/event-info/event-info.component";
 import { MatDividerModule } from "@angular/material/divider";
 import { LoadingButtonComponent } from "../../../shared/loading-button/loading-button.component";
 import { MatIconModule } from "@angular/material/icon";
 import { MatCardModule } from "@angular/material/card";
-import { AsyncPipe, DecimalPipe } from "@angular/common";
+import { DecimalPipe } from "@angular/common";
+import { PaymentService, PaymentState, Price } from "./payment.service";
+import { OrganizationsService } from "src/app/api/organizations.service";
 
 @Component({
   selector: "gt-payment",
   templateUrl: "./payment.component.html",
   styleUrls: ["./payment.component.scss"],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  standalone: true,
   imports: [
     MatCardModule,
     MatIconModule,
     LoadingButtonComponent,
     MatDividerModule,
     EventInfoComponent,
-    AsyncPipe,
-    DecimalPipe
-],
+    DecimalPipe,
+  ],
 })
-export class PaymentComponent implements OnInit {
-  productOptions$ = this.subscriptionService.formattedProductOptions;
-  subscriptionCreationLoadingId$ =
-    this.subscriptionService.subscriptionCreationLoadingId$;
+export class PaymentComponent
+  extends StatefulComponent<PaymentState, PaymentService>
+  implements OnInit
+{
+  private organizationService = inject(OrganizationsService);
+
+  products = this.service.products;
+  subscriptionCreationLoadingId = this.service.subscriptionCreationLoadingId;
   billingEmail = environment.billingEmail;
 
-  constructor(
-    private subscriptionService: SubscriptionsService,
-    private organizationService: OrganizationsService
-  ) {}
+  constructor() {
+    const service = inject(PaymentService);
 
-  ngOnInit() {
-    this.subscriptionService.retrieveProducts();
-    this.organizationService.retrieveOrganizations().subscribe();
+    super(service);
+
+    this.service = service;
   }
 
-  onSubmit(price: BasePrice) {
-    lastValueFrom(
-      this.organizationService.activeOrganization$.pipe(
-        first(),
-        filter((activeOrganization) => !!activeOrganization),
-        tap((activeOrganization) =>
-          this.subscriptionService.dispatchSubscriptionCreation(
-            activeOrganization!,
-            price
-          )
-        )
-      )
-    );
+  ngOnInit() {
+    this.service.productsResource.reload();
+  }
+
+  onSubmit(price: Price) {
+    const activeOrganization = this.organizationService.activeOrganization();
+    if (activeOrganization) {
+      this.service.dispatchSubscriptionCreation(activeOrganization, price);
+    }
   }
 }
