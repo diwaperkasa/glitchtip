@@ -1,8 +1,8 @@
 #!/bin/bash
 
 path=$(pwd)
-python_bin = "/usr/local/Cellar/python@3.13/3.13.5/bin/python3"
-pip_bin = "/usr/local/Cellar/python@3.13/3.13.5/bin/pip3"
+python_bin="/usr/local/Cellar/python@3.13/3.13.5/bin/python3"
+pip_bin="/usr/local/Cellar/python@3.13/3.13.5/bin/pip3"
 
 cp "${path}/env.example" "${path}/code/.env"
 cp "${path}/env.example" "${path}/frontend/.env"
